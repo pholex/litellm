@@ -171,7 +171,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         env: values.env,
       };
     },
-    onTokenReceived: (token) => {
+    onTokenReceived: (token, registeredClient) => {
       setOauthAccessToken(token?.access_token ?? null);
 
       if (token?.access_token) {
@@ -180,6 +180,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           ...(token.refresh_token && { refresh_token: token.refresh_token }),
           ...(token.expires_in && { expires_in: token.expires_in }),
           ...(token.scope && { scope: token.scope }),
+          ...(registeredClient?.clientId && { client_id: registeredClient.clientId }),
+          ...(registeredClient?.clientSecret && { client_secret: registeredClient.clientSecret }),
         };
 
         form.setFieldsValue({ credentials });

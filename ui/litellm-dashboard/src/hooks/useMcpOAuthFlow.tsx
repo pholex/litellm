@@ -26,7 +26,10 @@ interface UseMcpOAuthFlowOptions {
       }
     | undefined;
   getTemporaryPayload: () => Record<string, any> | null;
-  onTokenReceived: (tokenResponse: Record<string, any>) => void;
+  onTokenReceived: (
+    tokenResponse: Record<string, any>,
+    registeredClient?: { clientId?: string; clientSecret?: string },
+  ) => void;
   onBeforeRedirect?: () => void;
   // Distinguishes which form started the flow (e.g. "create" vs "edit"). Both forms
   // mount this hook with shared storage keys, so the return handler only processes a
@@ -314,7 +317,7 @@ export const useMcpOAuthFlow = ({
         accessToken,
       });
 
-      onTokenReceived(token);
+      onTokenReceived(token, { clientId: flowState.clientId, clientSecret: flowState.clientSecret });
       setTokenResponse(token);
       setStatus("success");
       setError(null);

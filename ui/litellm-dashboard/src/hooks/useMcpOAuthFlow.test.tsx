@@ -77,7 +77,7 @@ describe("useMcpOAuthFlow reset", () => {
 
     await waitFor(() => expect(result.current.status).toBe("success"));
     expect(result.current.tokenResponse).toEqual(token);
-    expect(onTokenReceived).toHaveBeenCalledWith(token);
+    expect(onTokenReceived).toHaveBeenCalledWith(token, expect.objectContaining({ clientId: "client-1" }));
 
     act(() => {
       result.current.reset();
@@ -112,6 +112,35 @@ describe("useMcpOAuthFlow reset", () => {
     const onTokenReceived2 = vi.fn();
     rerender({ onTokenReceived: onTokenReceived2 });
 
-    await waitFor(() => expect(onTokenReceived2).toHaveBeenCalledWith(token));
+    await waitFor(() =>
+      expect(onTokenReceived2).toHaveBeenCalledWith(token, expect.objectContaining({ clientId: "client-1" })),
+    );
+  });
+
+  it("passes the DCR-registered client_id and client_secret to onTokenReceived so the created server persists them", async () => {
+    const token = { access_token: "tok-xyz", refresh_token: "ref-xyz", expires_in: 3600 };
+    vi.mocked(networking.exchangeMcpOAuthToken).mockResolvedValue(token);
+    setSecureItem(RESULT_KEY, JSON.stringify({ state: "state-1", code: "code-1" }));
+    setSecureItem(
+      FLOW_STATE_KEY,
+      JSON.stringify({
+        state: "state-1",
+        codeVerifier: "verifier-1",
+        serverId: "server-1",
+        clientId: "dcr-client-xyz",
+        clientSecret: "dcr-secret-abc",
+        redirectUri: "https://app.example.com/ui/mcp/oauth/callback",
+        flowSource: "create",
+      }),
+    );
+
+    const onTokenReceived = vi.fn();
+    const { result } = renderFlow(onTokenReceived);
+
+    await waitFor(() => expect(result.current.status).toBe("success"));
+    expect(onTokenReceived).toHaveBeenCalledWith(token, {
+      clientId: "dcr-client-xyz",
+      clientSecret: "dcr-secret-abc",
+    });
   });
 });
