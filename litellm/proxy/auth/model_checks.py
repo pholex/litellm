@@ -181,6 +181,16 @@ def get_team_models(
     # deduplicate while preserving order
     all_models = list(dict.fromkeys(all_models))
 
+    # The all-proxy-models sentinel is a wildcard directive, not a real model —
+    # it must never surface in a caller's model list. get_key_models() drops it
+    # implicitly by replacing the list with proxy_model_list; the team path
+    # appends instead, so strip the bare sentinel explicitly here. Access is
+    # unaffected: the real proxy models were already expanded in above.
+    if SpecialModelNames.all_proxy_models.value in all_models:
+        all_models = [
+            m for m in all_models if m != SpecialModelNames.all_proxy_models.value
+        ]
+
     verbose_proxy_logger.debug("ALL TEAM MODELS - {}".format(len(all_models)))
     return all_models
 

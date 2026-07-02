@@ -8093,7 +8093,15 @@ async def model_list(
                 "(requires background_health_checks); returning unfiltered model list"
             )
 
-    hidden_names = blocked_names | unhealthy_names
+    # Also hide internal fallback targets (names ending in -fallback) from the
+    # listing. Presentation-only: they stay routable for in-flight fallbacks.
+    listing_hidden_names = (
+        llm_router.get_listing_hidden_model_names()
+        if llm_router is not None
+        else set()
+    )
+
+    hidden_names = blocked_names | unhealthy_names | listing_hidden_names
 
     # If scope=expand and user has admin privileges, return all proxy models
     if should_expand_scope:
@@ -8249,7 +8257,11 @@ async def model_info(
     unhealthy_names: set[str] = set()
     if healthy_only and llm_router is not None:
         unhealthy_names = await llm_router.async_get_fully_unhealthy_model_names()
-    hidden_names = blocked_names | unhealthy_names
+    # Mirror /v1/models: also hide internal fallback targets (-fallback names).
+    listing_hidden_names = (
+        llm_router.get_listing_hidden_model_names() if llm_router is not None else set()
+    )
+    hidden_names = blocked_names | unhealthy_names | listing_hidden_names
     if hidden_names:
         all_models = [m for m in all_models if m not in hidden_names]
 
