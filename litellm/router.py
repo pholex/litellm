@@ -10148,6 +10148,22 @@ class Router:
             name for name, fully_blocked in blocked_by_name.items() if fully_blocked
         }
 
+    def get_listing_hidden_model_names(self) -> Set[str]:
+        """
+        Returns model_names hidden from client listings (e.g. `/v1/models`) by
+        naming convention — currently any name ending in ``-fallback``.
+
+        These are internal fallback targets (referenced from router_settings
+        fallbacks). Hiding is presentation-only: they remain fully routable, so
+        an in-flight fallback still works; they just don't clutter the model
+        list shown to end users.
+        """
+        return {
+            name
+            for name in (self.get_model_names() or [])
+            if name.endswith("-fallback")
+        }
+
     @staticmethod
     def _are_all_deployments_blocked(
         deployments: List[DeploymentTypedDict],
