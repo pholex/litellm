@@ -17,8 +17,11 @@ def test_get_team_models_for_all_models_and_team_only_models():
     result = get_team_models(
         team_models, proxy_model_list, model_access_groups, include_model_access_groups
     )
-    combined_models = team_models + proxy_model_list
+    # The all-proxy-models wildcard sentinel is a directive, not a real model,
+    # and must not leak into the returned list — only its expansion should.
+    combined_models = [m for m in team_models if m != "all-proxy-models"] + proxy_model_list
     assert set(result) == set(combined_models)
+    assert "all-proxy-models" not in result
 
 
 def test_get_team_models_all_proxy_models_includes_access_groups():
