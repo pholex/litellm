@@ -148,25 +148,33 @@ def get_team_models(
     - Empty list if no models set
     - If model_access_groups is provided, only return models that are in the access groups
     """
-    all_models_set: Set[str] = set()
+    all_models_ordered: List[str] = []
+    seen: Set[str] = set()
+
+    def _append_unique_ordered(items):
+        for item in items:
+            if item not in seen:
+                seen.add(item)
+                all_models_ordered.append(item)
+
     if len(team_models) > 0:
-        all_models_set.update(team_models)
-        if SpecialModelNames.all_team_models.value in all_models_set:
-            all_models_set.update(team_models)
+        _append_unique_ordered(team_models)
+        if SpecialModelNames.all_team_models.value in seen:
             # GH#30619: expand all-team-models sentinel
             # to the actual proxy model list
-            all_models_set.discard(SpecialModelNames.all_team_models.value)
-            all_models_set.update(proxy_model_list)
+            seen.discard(SpecialModelNames.all_team_models.value)
+            all_models_ordered.remove(SpecialModelNames.all_team_models.value)
+            _append_unique_ordered(proxy_model_list)
             if include_model_access_groups:
-                all_models_set.update(model_access_groups.keys())
-        if SpecialModelNames.all_proxy_models.value in all_models_set:
-            all_models_set.update(proxy_model_list)
+                _append_unique_ordered(model_access_groups.keys())
+        if SpecialModelNames.all_proxy_models.value in seen:
+            _append_unique_ordered(proxy_model_list)
             if include_model_access_groups:
-                all_models_set.update(model_access_groups.keys())
+                _append_unique_ordered(model_access_groups.keys())
 
     all_models = _get_models_from_access_groups(
         model_access_groups=model_access_groups,
-        all_models=list(all_models_set),
+        all_models=all_models_ordered,
         include_model_access_groups=include_model_access_groups,
     )
 
