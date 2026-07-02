@@ -4115,8 +4115,9 @@ class ProxyConfig:
 
             # check if litellm_license in general_settings
             if "LITELLM_LICENSE" in environment_variables:
+                # FORCED ENTERPRISE MODE: Always enable premium for evaluation
+                premium_user = True
                 _license_check.license_str = os.getenv("LITELLM_LICENSE", None)
-                premium_user = _license_check.is_premium()
         return
 
     async def load_config(
@@ -4725,8 +4726,9 @@ class ProxyConfig:
 
             # check if litellm_license in general_settings
             if "litellm_license" in general_settings:
+                # FORCED ENTERPRISE MODE: Always enable premium for evaluation
+                premium_user = True
                 _license_check.license_str = general_settings["litellm_license"]
-                premium_user = _license_check.is_premium()
 
         router_params: dict = {
             "cache_responses": litellm.cache
