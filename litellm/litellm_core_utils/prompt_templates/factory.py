@@ -5495,6 +5495,30 @@ def _is_bedrock_tool_block(tool: dict) -> bool:
     )
 
 
+def _bedrock_claude_rejects_strict(model: Optional[str]) -> bool:
+    """Return True if this Bedrock Claude model rejects a toolSpec-level ``strict``.
+
+    Bedrock's Converse API rejects a toolSpec-level ``strict`` field for the
+    Claude 5+ generation with ``tools.N.custom.strict: Extra inputs are not
+    permitted`` (400), while Claude 4.x (e.g. opus-4-8, sonnet-4-5) and older
+    accept it. We detect the major family version from the (region-stripped)
+    base model name, e.g. ``anthropic.claude-sonnet-5`` -> 5 (reject),
+    ``anthropic.claude-opus-4-8`` -> 4 (keep).
+    """
+    from litellm.llms.bedrock.common_utils import get_bedrock_base_model
+
+    if not model:
+        return False
+    base = get_bedrock_base_model(model)
+    if "claude" not in base:
+        return False
+    # Match the "name-first" modern IDs: claude-<family>-<major>...
+    match = re.search(r"claude-[a-z]+-(\d+)", base)
+    if not match:
+        return False
+    return int(match.group(1)) >= 5
+
+
 def _bedrock_tools_pt(
     tools: List, model: Optional[str] = None
 ) -> List[BedrockToolBlock]:
@@ -5560,6 +5584,14 @@ def _bedrock_tools_pt(
     supports_strict_tools = bool(
         model and get_bedrock_base_model(model).startswith("anthropic")
     )
+    # The Claude 5+ generation on Bedrock Converse REJECTS a toolSpec-level
+    # `strict` field ("tools.N.custom.strict: Extra inputs are not permitted",
+    # 400), whereas Claude 4.x accepts it. OpenAI clients such as Codex send
+    # `function.strict: true`, so we must suppress strict for Claude 5+ only,
+    # keeping it for older Claude models that honour it.
+    forward_strict = supports_strict_tools and not _bedrock_claude_rejects_strict(
+        model
+    )
     tool_block_list: List[BedrockToolBlock] = []
     for tool_idx, tool in enumerate(tools):
         # Check if tool is already a BedrockToolBlock (e.g., systemTool for Nova grounding)
@@ -5611,7 +5643,11 @@ def _bedrock_tools_pt(
                 name=name,
                 description=description,
                 parameters=parameters,
-                strict=tool.get("function", {}).get("strict", None),
+                strict=(
+                    tool.get("function", {}).get("strict", None)
+                    if forward_strict
+                    else None
+                ),
                 supports_strict_tools=supports_strict_tools,
             ),
         )
