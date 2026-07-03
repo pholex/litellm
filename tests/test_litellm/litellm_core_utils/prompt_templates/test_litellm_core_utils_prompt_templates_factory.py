@@ -903,10 +903,12 @@ def test_bedrock_tools_unpack_defs():
 def test_bedrock_tools_pt_strict_parameter():
     """Regression for strict tools on the Bedrock Converse path.
 
-    Claude on Bedrock honours strict in toolSpec (with additionalProperties, which
-    Bedrock requires alongside strict); without forwarding it the model ignores the
-    enum constraint the caller asked for. Every other Bedrock family (Nova, Llama,
-    GPT-OSS) rejects the strict field, so it must only be forwarded for Claude.
+    Claude 4.x on Bedrock honours a toolSpec-level ``strict`` field (with
+    ``additionalProperties``), so it must still be forwarded there. The Claude
+    5+ generation rejects it with ``tools.N.custom.strict: Extra inputs are not
+    permitted`` (400) even though OpenAI clients such as Codex send
+    ``function.strict: true``; it must be suppressed for those models. Every
+    non-Claude family (Nova, Llama, GPT-OSS) rejects strict outright.
     """
     tools_with_strict = [
         {
@@ -924,12 +926,22 @@ def test_bedrock_tools_pt_strict_parameter():
             },
         }
     ]
+    # Claude 4.x: strict is forwarded (model honours it)
     result = _bedrock_tools_pt(
         tools_with_strict, model="anthropic.claude-sonnet-4-5-20250929-v1:0"
     )
     assert result[0]["toolSpec"]["strict"] is True
     assert result[0]["toolSpec"]["inputSchema"]["json"]["additionalProperties"] is False
 
+    # Claude 5+: strict is suppressed (Bedrock rejects it), but
+    # additionalProperties (inside the JSON schema) is still forwarded.
+    result = _bedrock_tools_pt(
+        tools_with_strict, model="bedrock/global.anthropic.claude-sonnet-5"
+    )
+    assert "strict" not in result[0]["toolSpec"]
+    assert result[0]["toolSpec"]["inputSchema"]["json"]["additionalProperties"] is False
+
+    # Non-Claude family: neither strict nor additionalProperties forwarded
     result = _bedrock_tools_pt(tools_with_strict, model="us.amazon.nova-micro-v1:0")
     assert "strict" not in result[0]["toolSpec"]
     assert "additionalProperties" not in result[0]["toolSpec"]["inputSchema"]["json"]

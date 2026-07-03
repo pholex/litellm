@@ -4960,6 +4960,34 @@ def _is_bedrock_tool_block(tool: dict) -> bool:
     return isinstance(tool, dict) and ("systemTool" in tool or "toolSpec" in tool or "cachePoint" in tool)
 
 
+def _bedrock_claude_rejects_strict(model: Optional[str]) -> bool:
+    """Return True if this Bedrock Claude model rejects a toolSpec-level ``strict``.
+
+    Bedrock's Converse API rejects a toolSpec-level ``strict`` field for the
+    Claude 5+ generation with ``tools.N.custom.strict: Extra inputs are not
+    permitted`` (400), while Claude 4.x accepts it (except Opus 4.7/4.8, which
+    upstream already flags via ``bedrock_converse_supports_strict_tools: false``
+    in the model map — see #31582). Upstream's per-model flag defaults to True
+    for unflagged Anthropic entries, so the 5+ generation still needs this
+    generational guard until each model is flagged in the JSON. We detect the
+    major family version from the (region-stripped) base model name, e.g.
+    ``anthropic.claude-sonnet-5`` -> 5 (reject), ``anthropic.claude-opus-4-8``
+    -> 4 (handled by the model-map flag).
+    """
+    from litellm.llms.bedrock.common_utils import get_bedrock_base_model
+
+    if not model:
+        return False
+    base = get_bedrock_base_model(model)
+    if "claude" not in base:
+        return False
+    # Match the "name-first" modern IDs: claude-<family>-<major>...
+    match = re.search(r"claude-[a-z]+-(\d+)", base)
+    if not match:
+        return False
+    return int(match.group(1)) >= 5
+
+
 def _bedrock_tools_pt(tools: List, model: Optional[str] = None) -> List[BedrockToolBlock]:
     """
     OpenAI tools looks like:
@@ -5022,6 +5050,13 @@ def _bedrock_tools_pt(tools: List, model: Optional[str] = None) -> List[BedrockT
     # maps toolSpec to the native Anthropic tool shape, which has no strict
     # field, even though Anthropic's native API accepts it as a top-level key.
     supports_strict_tools = bool(model and bedrock_converse_supports_strict_tools(model))
+    # The Claude 5+ generation on Bedrock Converse also REJECTS a toolSpec-level
+    # `strict` ("tools.N.custom.strict: Extra inputs are not permitted", 400) but
+    # is not yet flagged in upstream's model map, so apply the generational guard
+    # on top of the per-model flag. OpenAI clients such as Codex send
+    # `function.strict: true`, so this must be suppressed for Claude 5+ while
+    # older Claude models that honour it keep it.
+    forward_strict = supports_strict_tools and not _bedrock_claude_rejects_strict(model)
     tool_block_list: List[BedrockToolBlock] = []
     for tool_idx, tool in enumerate(tools):
         # Check if tool is already a BedrockToolBlock (e.g., systemTool for Nova grounding)
@@ -5067,7 +5102,14 @@ def _bedrock_tools_pt(tools: List, model: Optional[str] = None) -> List[BedrockT
                 name=name,
                 description=description,
                 parameters=parameters,
-                strict=tool.get("function", {}).get("strict", None),
+                strict=(
+                    tool.get("function", {}).get("strict", None)
+                    if forward_strict
+                    else None
+                ),
+                # NOT forward_strict: this flag also controls keeping
+                # additionalProperties inside the JSON schema, which Claude 5+
+                # still honours — only the toolSpec-level strict key is rejected.
                 supports_strict_tools=supports_strict_tools,
             ),
         )
