@@ -172,6 +172,7 @@ from litellm.utils import (
     token_counter,
     validate_and_fix_openai_messages,
     validate_and_fix_openai_tools,
+    drop_namespace_tools,
     validate_and_fix_thinking_param,
     validate_chat_completion_tool_choice,
     validate_openai_optional_params,
@@ -4805,6 +4806,13 @@ def completion(  # type: ignore
     # validate messages
     messages = validate_and_fix_openai_messages(messages=messages)
     tools = validate_and_fix_openai_tools(tools=tools)
+    # Per-deployment opt-in (litellm_param drop_namespace_tools: true): strip
+    # Codex-private type:"namespace" tools that some OpenAI-compatible upstreams
+    # (Moonshot/Kimi, Zhipu/GLM, DeepSeek) reject with 400. Covers both the direct
+    # /chat/completions path and the /responses→chat bridge (handler forwards the
+    # flag into (a)completion kwargs).
+    if kwargs.get("drop_namespace_tools") and tools is not None:
+        tools = drop_namespace_tools(tools)
     # validate tool_choice
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
     # validate optional params

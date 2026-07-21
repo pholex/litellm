@@ -3166,6 +3166,7 @@ all_litellm_params = (
         "litellm_session_id",
         "use_litellm_proxy",
         "use_chat_completions_api",
+        "drop_namespace_tools",
         "prompt_label",
         "shared_session",
         "search_tool_name",

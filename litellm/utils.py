@@ -7320,6 +7320,26 @@ def validate_and_fix_openai_tools(tools: Optional[List]) -> Optional[List[dict]]
     return new_tools
 
 
+def drop_namespace_tools(tools: Optional[List[dict]]) -> Optional[List[dict]]:
+    """
+    Drop tools whose ``type`` is ``"namespace"``.
+
+    ``namespace`` is a Codex-private tool type. Some OpenAI-compatible upstreams
+    (Moonshot/Kimi, Zhipu/GLM, DeepSeek) validate tool types strictly and reject
+    the whole request with 400 ("unknown tool type: namespace" / "type is illegal")
+    when they see it. Enabled per-deployment via the litellm_param
+    ``drop_namespace_tools: true``. Returns None when nothing is left so an empty
+    ``tools: []`` array is not sent upstream.
+    """
+    if not tools:
+        return tools
+    filtered = [
+        t for t in tools
+        if not (isinstance(t, dict) and t.get("type") == "namespace")
+    ]
+    return filtered or None
+
+
 def validate_and_fix_thinking_param(
     thinking: Optional["AnthropicThinkingParam"],
 ) -> Optional["AnthropicThinkingParam"]:
