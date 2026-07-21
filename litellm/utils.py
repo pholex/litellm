@@ -7323,20 +7323,25 @@ def validate_and_fix_openai_tools(tools: Optional[List]) -> Optional[List[dict]]
 
 def drop_namespace_tools(tools: Optional[List[dict]]) -> Optional[List[dict]]:
     """
-    Drop tools whose ``type`` is ``"namespace"``.
+    Keep only ``function``-type tools; drop every other tool type.
 
-    ``namespace`` is a Codex-private tool type. Some OpenAI-compatible upstreams
-    (Moonshot/Kimi, Zhipu/GLM, DeepSeek) validate tool types strictly and reject
-    the whole request with 400 ("unknown tool type: namespace" / "type is illegal")
-    when they see it. Enabled per-deployment via the litellm_param
-    ``drop_namespace_tools: true``. Returns None when nothing is left so an empty
-    ``tools: []`` array is not sent upstream.
+    Codex sends private tool types (``namespace``, ``custom``, ``local_shell``,
+    ...) that strict OpenAI-compatible upstreams (Moonshot/Kimi, Zhipu/GLM,
+    DeepSeek) reject with 400 ("unknown tool type: namespace/custom" / "type is
+    illegal"). Only ``function`` is universally accepted, so an allowlist is the
+    stable filter where a per-type blocklist was whack-a-mole (namespace was
+    patched first, then ``custom`` hit the same 400). A missing ``type`` is kept
+    and treated as ``function``, matching upstream defaults. Enabled
+    per-deployment via the litellm_param ``drop_namespace_tools: true`` (name
+    kept for config compatibility with the original namespace-only version).
+    Returns None when nothing is left so an empty ``tools: []`` array is not
+    sent upstream.
     """
     if not tools:
         return tools
     filtered = [
         t for t in tools
-        if not (isinstance(t, dict) and t.get("type") == "namespace")
+        if not isinstance(t, dict) or t.get("type") in (None, "function")
     ]
     return filtered or None
 
