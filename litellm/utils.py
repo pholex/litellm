@@ -7346,6 +7346,39 @@ def drop_namespace_tools(tools: Optional[List[dict]]) -> Optional[List[dict]]:
     return filtered or None
 
 
+def filter_tools_by_allowed_types(
+    tools: Optional[List[dict]], allowed_tool_types: List[str]
+) -> Optional[List[dict]]:
+    """
+    Keep only tools whose ``type`` is in ``allowed_tool_types``; drop the rest.
+
+    Configurable-allowlist generalization of drop_namespace_tools, for
+    providers that support SOME non-function tool types: Bedrock Mantle's
+    OpenAI-compatible endpoint accepts function/mcp/custom/namespace/
+    tool_search but 400s on Codex's ``local_shell`` ("Tool type 'local_shell'
+    is not supported"). Enabled per-deployment via the litellm_param
+    ``allowed_tool_types``, e.g.::
+
+        litellm_params:
+          model: openai/openai.gpt-5.6-luna
+          allowed_tool_types: ["function", "custom", "namespace", "mcp", "tool_search"]
+
+    A tool without a ``type`` key is treated as ``function`` (matching OpenAI
+    defaults). Returns None when no tools survive so an empty ``tools: []``
+    array is not sent upstream. Same implementation as upstream PR
+    BerriAI#34198 — swap to the upstream version once it lands.
+    """
+    if not tools:
+        return tools
+    filtered = [
+        t
+        for t in tools
+        if not isinstance(t, dict)
+        or (t.get("type") or "function") in allowed_tool_types
+    ]
+    return filtered or None
+
+
 def validate_and_fix_thinking_param(
     thinking: Optional["AnthropicThinkingParam"],
 ) -> Optional["AnthropicThinkingParam"]:

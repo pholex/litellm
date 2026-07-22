@@ -61,6 +61,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import (
     ProviderConfigManager,
     client,
+    filter_tools_by_allowed_types,
 )
 
 if TYPE_CHECKING:
@@ -911,6 +912,23 @@ def responses(
         if text is not None:
             # Update local_vars to include the converted text parameter
             local_vars["text"] = text
+
+        # Per-deployment opt-in tool-type filtering (litellm_params
+        # allowed_tool_types / drop_namespace_tools). Must run HERE and not only
+        # in completion(): providers with native /responses support (e.g.
+        # Bedrock Mantle) never go through the responses->chat bridge, so the
+        # completion() hook can't protect them. Mantle 400s on Codex's
+        # local_shell tool type, which silently kicks every gpt-5.6 request to
+        # the qwen fallback. local_vars is re-synced because downstream helpers
+        # read tools from it.
+        _allowed_tool_types = kwargs.get("allowed_tool_types")
+        if _allowed_tool_types is None and kwargs.get("drop_namespace_tools"):
+            _allowed_tool_types = ["function"]
+        if _allowed_tool_types is not None and tools is not None:
+            tools = filter_tools_by_allowed_types(
+                tools=list(tools), allowed_tool_types=_allowed_tool_types
+            )
+            local_vars["tools"] = tools
 
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)

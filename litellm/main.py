@@ -173,6 +173,7 @@ from litellm.utils import (
     validate_and_fix_openai_messages,
     validate_and_fix_openai_tools,
     drop_namespace_tools,
+    filter_tools_by_allowed_types,
     validate_and_fix_thinking_param,
     validate_chat_completion_tool_choice,
     validate_openai_optional_params,
@@ -4814,6 +4815,14 @@ def completion(  # type: ignore
     # flag into (a)completion kwargs).
     if kwargs.get("drop_namespace_tools") and tools is not None:
         tools = drop_namespace_tools(tools)
+    # allowed_tool_types: configurable-allowlist variant (e.g. Mantle supports
+    # custom/namespace but rejects local_shell). On the bridge path tools may
+    # already be filtered in responses(); this second pass is idempotent.
+    _allowed_tool_types = kwargs.get("allowed_tool_types")
+    if _allowed_tool_types is not None and tools is not None:
+        tools = filter_tools_by_allowed_types(
+            tools=tools, allowed_tool_types=_allowed_tool_types
+        )
     # validate tool_choice
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
     # validate optional params
