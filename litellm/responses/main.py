@@ -933,18 +933,27 @@ def responses(
             # tools param (Mantle accepts the same custom/grammar tool there —
             # verified 2026-07-22) and let the allowlist below filter them.
             if isinstance(input, list):
+                # `_found` (saw an additional_tools item) is tracked SEPARATELY
+                # from `_relocated_tools` (that item carried tools): follow-up
+                # Codex turns re-send the item with an EMPTY tools list, and the
+                # empty item is still a non-standard variant Mantle rejects —
+                # it must be dropped even when there is nothing to merge, else
+                # every turn after the first 400s again.
+                _found_additional_tools = False
                 _relocated_tools: list = []
                 _kept_items = []
                 for _item in input:
                     if isinstance(_item, dict) and _item.get("type") == "additional_tools":
+                        _found_additional_tools = True
                         _relocated_tools.extend(_item.get("tools") or [])
                     else:
                         _kept_items.append(_item)
-                if _relocated_tools:
+                if _found_additional_tools:
                     input = _kept_items
-                    tools = list(tools) if tools is not None else []
-                    tools.extend(_relocated_tools)
                     local_vars["input"] = input
+                    if _relocated_tools:
+                        tools = list(tools) if tools is not None else []
+                        tools.extend(_relocated_tools)
             if tools is not None:
                 tools = filter_tools_by_allowed_types(
                     tools=list(tools), allowed_tool_types=_allowed_tool_types
