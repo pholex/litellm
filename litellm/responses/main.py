@@ -924,11 +924,32 @@ def responses(
         _allowed_tool_types = kwargs.get("allowed_tool_types")
         if _allowed_tool_types is None and kwargs.get("drop_namespace_tools"):
             _allowed_tool_types = ["function"]
-        if _allowed_tool_types is not None and tools is not None:
-            tools = filter_tools_by_allowed_types(
-                tools=list(tools), allowed_tool_types=_allowed_tool_types
-            )
-            local_vars["tools"] = tools
+        if _allowed_tool_types is not None:
+            # Codex Desktop (0.145 alpha) delivers its tools inside an input
+            # item {type: "additional_tools", role: "developer", tools: [...]}
+            # instead of the tools param. Strict upstreams 400 on the unknown
+            # input variant (Mantle: "Invalid 'input': value did not match any
+            # expected variant"), so relocate the nested tools into the regular
+            # tools param (Mantle accepts the same custom/grammar tool there —
+            # verified 2026-07-22) and let the allowlist below filter them.
+            if isinstance(input, list):
+                _relocated_tools: list = []
+                _kept_items = []
+                for _item in input:
+                    if isinstance(_item, dict) and _item.get("type") == "additional_tools":
+                        _relocated_tools.extend(_item.get("tools") or [])
+                    else:
+                        _kept_items.append(_item)
+                if _relocated_tools:
+                    input = _kept_items
+                    tools = list(tools) if tools is not None else []
+                    tools.extend(_relocated_tools)
+                    local_vars["input"] = input
+            if tools is not None:
+                tools = filter_tools_by_allowed_types(
+                    tools=list(tools), allowed_tool_types=_allowed_tool_types
+                )
+                local_vars["tools"] = tools
 
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
