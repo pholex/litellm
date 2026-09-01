@@ -48,6 +48,7 @@ from litellm.proxy._experimental.mcp_server.mcp_context import (
     _mcp_active_toolset_id,
     _mcp_gateway_initialize_instructions,
     _mcp_gateway_server_name,
+    mcp_gateway_server_version,
 )
 from litellm.proxy._experimental.mcp_server.mcp_debug import MCPDebug
 from litellm.proxy._experimental.mcp_server.utils import (
@@ -358,6 +359,9 @@ if MCP_AVAILABLE:
         scoped_server_name = _mcp_gateway_server_name.get()
         if scoped_server_name is not None:
             updates["server_name"] = scoped_server_name
+        scoped_server_version = mcp_gateway_server_version.get()
+        if scoped_server_version is not None:
+            updates["server_version"] = scoped_server_version
         return opts.model_copy(update=updates) if updates else opts
 
     ########################################################
@@ -1449,18 +1453,22 @@ if MCP_AVAILABLE:
             )
         merged = _merge_gateway_initialize_instructions(allowed_mcp_servers=allowed)
         scoped_server_name = None
+        scoped_server_version = None
         if scoped_server_endpoint and len(allowed) == 1:
             scoped_server = allowed[0]
             scoped_server_name = (
                 scoped_server.alias or scoped_server.server_name or scoped_server.name or scoped_server.server_id
             )
+            scoped_server_version = global_mcp_server_manager.get_upstream_server_version(scoped_server.server_id)
         instructions_token = _mcp_gateway_initialize_instructions.set(merged)
         server_name_token = _mcp_gateway_server_name.set(scoped_server_name)
+        server_version_token = mcp_gateway_server_version.set(scoped_server_version)
         try:
             yield
         finally:
             _mcp_gateway_initialize_instructions.reset(instructions_token)
             _mcp_gateway_server_name.reset(server_name_token)
+            mcp_gateway_server_version.reset(server_version_token)
 
     async def _get_tools_from_mcp_servers(
         user_api_key_auth: Optional[UserAPIKeyAuth],

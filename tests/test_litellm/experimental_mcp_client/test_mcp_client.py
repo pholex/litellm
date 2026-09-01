@@ -423,6 +423,68 @@ class TestMCPClientInstructionsCapture:
         await client._execute_session_operation(transport_ctx, _op)
         assert client._last_initialize_instructions is None
 
+    @pytest.mark.asyncio
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_captures_server_version_from_initialize(self, mock_session_cls):
+        """serverInfo.version from upstream initialize() is captured and stripped."""
+        client = MCPClient(
+            server_url="http://example.com/mcp",
+            transport_type="http",
+        )
+        assert client._last_initialize_server_version is None
+
+        mock_session = AsyncMock()
+        init_result = MagicMock()
+        init_result.instructions = None
+        init_result.serverInfo.version = " v2026.09.01.2 "
+        mock_session.initialize = AsyncMock(return_value=init_result)
+
+        session_ctx = MagicMock()
+        session_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        session_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_session_cls.return_value = session_ctx
+
+        transport_ctx = MagicMock()
+        transport_ctx.__aenter__ = AsyncMock(return_value=(MagicMock(), MagicMock()))
+        transport_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        async def _op(session):
+            return "done"
+
+        await client._execute_session_operation(transport_ctx, _op)
+        assert client._last_initialize_server_version == "v2026.09.01.2"
+
+    @pytest.mark.asyncio
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_missing_server_version_stays_none(self, mock_session_cls):
+        """An initialize result without a string serverInfo.version leaves the field None."""
+        client = MCPClient(
+            server_url="http://example.com/mcp",
+            transport_type="http",
+        )
+        client._last_initialize_server_version = "stale"
+
+        mock_session = AsyncMock()
+        init_result = MagicMock()
+        init_result.instructions = None
+        init_result.serverInfo = None
+        mock_session.initialize = AsyncMock(return_value=init_result)
+
+        session_ctx = MagicMock()
+        session_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        session_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_session_cls.return_value = session_ctx
+
+        transport_ctx = MagicMock()
+        transport_ctx.__aenter__ = AsyncMock(return_value=(MagicMock(), MagicMock()))
+        transport_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        async def _op(session):
+            return "done"
+
+        await client._execute_session_operation(transport_ctx, _op)
+        assert client._last_initialize_server_version is None
+
 
 # ---------------------------------------------------------------------------
 # Transport error surfacing

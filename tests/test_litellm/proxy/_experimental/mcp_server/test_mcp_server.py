@@ -5034,6 +5034,109 @@ class TestGatewayCreateInitializationOptions:
         )
 
     @pytest.mark.asyncio
+    async def test_scoped_request_uses_upstream_server_version(self):
+        try:
+            from litellm.proxy._experimental.mcp_server.server import (
+                _gateway_initialize_instructions_request_scope,
+                global_mcp_server_manager,
+                server,
+            )
+            from litellm.proxy._experimental.mcp_server.utils import LITELLM_MCP_SERVER_VERSION
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        scoped_server = MCPServer(
+            server_id="server-123",
+            name="upstream-server",
+            alias="orlink",
+            transport=MCPTransport.http,
+            url="https://example.com/mcp",
+        )
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=[scoped_server],
+            ),
+            patch.object(
+                global_mcp_server_manager,
+                "_ensure_upstream_initialize_instructions_cached",
+                new_callable=AsyncMock,
+            ),
+            patch.dict(
+                global_mcp_server_manager._upstream_initialize_server_version_by_server_id,
+                {"server-123": "v2026.09.01.2"},
+                clear=True,
+            ),
+        ):
+            async with _gateway_initialize_instructions_request_scope(
+                user_api_key_auth=None,
+                mcp_servers=["orlink"],
+                client_ip=None,
+                scoped_server_endpoint=True,
+            ):
+                assert server.create_initialization_options().server_version == "v2026.09.01.2"
+
+            # Aggregate (non-scoped) endpoint keeps the gateway's own version.
+            async with _gateway_initialize_instructions_request_scope(
+                user_api_key_auth=None,
+                mcp_servers=["orlink"],
+                client_ip=None,
+                scoped_server_endpoint=False,
+            ):
+                assert server.create_initialization_options().server_version == LITELLM_MCP_SERVER_VERSION
+
+        assert server.create_initialization_options().server_version == LITELLM_MCP_SERVER_VERSION
+
+    @pytest.mark.asyncio
+    async def test_scoped_request_without_cached_version_keeps_gateway_version(self):
+        try:
+            from litellm.proxy._experimental.mcp_server.server import (
+                _gateway_initialize_instructions_request_scope,
+                global_mcp_server_manager,
+                server,
+            )
+            from litellm.proxy._experimental.mcp_server.utils import LITELLM_MCP_SERVER_VERSION
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        scoped_server = MCPServer(
+            server_id="server-123",
+            name="upstream-server",
+            alias="orlink",
+            transport=MCPTransport.http,
+            url="https://example.com/mcp",
+        )
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=[scoped_server],
+            ),
+            patch.object(
+                global_mcp_server_manager,
+                "_ensure_upstream_initialize_instructions_cached",
+                new_callable=AsyncMock,
+            ),
+            patch.dict(
+                global_mcp_server_manager._upstream_initialize_server_version_by_server_id,
+                {},
+                clear=True,
+            ),
+        ):
+            async with _gateway_initialize_instructions_request_scope(
+                user_api_key_auth=None,
+                mcp_servers=["orlink"],
+                client_ip=None,
+                scoped_server_endpoint=True,
+            ):
+                opts = server.create_initialization_options()
+                assert opts.server_name == "orlink"
+                assert opts.server_version == LITELLM_MCP_SERVER_VERSION
+
+    @pytest.mark.asyncio
     async def test_sse_handler_scopes_server_name_from_single_server_path(self):
         try:
             from litellm.proxy._experimental.mcp_server import server as mcp_server

@@ -231,6 +231,7 @@ class MCPClient:
         # upstream client's auth= slot, taking precedence over the SigV4 aws_auth.
         self._resolved_auth: Optional[httpx.Auth] = resolved_auth
         self._last_initialize_instructions: Optional[str] = None
+        self._last_initialize_server_version: Optional[str] = None
         self._sampling_callback: Optional[Callable] = sampling_callback
         self._elicitation_callback: Optional[Callable] = elicitation_callback
         self._logging_callback: Optional[Callable] = logging_callback
@@ -359,11 +360,9 @@ class MCPClient:
             session = await session_ctx.__aenter__()
             try:
                 init_result = await session.initialize()
-                self._last_initialize_instructions = None
-                if init_result is not None:
-                    ins = getattr(init_result, "instructions", None)
-                    if isinstance(ins, str) and ins.strip():
-                        self._last_initialize_instructions = ins.strip()
+                self._last_initialize_instructions, self._last_initialize_server_version = self._initialize_metadata(
+                    init_result
+                )
                 return await operation(session)
             finally:
                 try:
@@ -382,11 +381,22 @@ class MCPClient:
                 if root_cause is not None and isinstance(in_flight_error, asyncio.CancelledError):
                     raise root_cause from in_flight_error
 
+    @staticmethod
+    def _initialize_metadata(init_result: object) -> tuple[Optional[str], Optional[str]]:
+        """Return (instructions, serverInfo.version) from an InitializeResult, stripped; None when absent or blank."""
+        instructions = getattr(init_result, "instructions", None)
+        server_version = getattr(getattr(init_result, "serverInfo", None), "version", None)
+        return (
+            instructions.strip() if isinstance(instructions, str) and instructions.strip() else None,
+            server_version.strip() if isinstance(server_version, str) and server_version.strip() else None,
+        )
+
     async def run_with_session(self, operation: Callable[[ClientSession], Awaitable[TSessionResult]]) -> TSessionResult:
         """Open a session, run the provided coroutine, and clean up."""
         http_client: Optional[httpx.AsyncClient] = None
         try:
             self._last_initialize_instructions = None
+            self._last_initialize_server_version = None
             transport_ctx, http_client = self._create_transport_context()
             return await self._execute_session_operation(transport_ctx, operation)
         except Exception:

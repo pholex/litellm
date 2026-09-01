@@ -557,6 +557,7 @@ class MCPServerManager:
         }
         """
         self._upstream_initialize_instructions_by_server_id: Dict[str, str] = {}
+        self._upstream_initialize_server_version_by_server_id: dict[str, str] = {}
         # Per-server monotonic timestamp of last upstream prefetch attempt (success,
         # empty result, or failure). Used to throttle re-probes for servers that do
         # not return instructions, and to apply a short cooldown after failures.
@@ -566,6 +567,12 @@ class MCPServerManager:
         raw = getattr(client, "_last_initialize_instructions", None)
         if raw and str(raw).strip():
             self._upstream_initialize_instructions_by_server_id[server.server_id] = str(raw).strip()
+        version = getattr(client, "_last_initialize_server_version", None)
+        if isinstance(version, str) and version.strip():
+            self._upstream_initialize_server_version_by_server_id[server.server_id] = version.strip()
+
+    def get_upstream_server_version(self, server_id: str) -> Optional[str]:
+        return self._upstream_initialize_server_version_by_server_id.get(server_id)
 
     async def _ensure_upstream_initialize_instructions_cached(self, server: MCPServer) -> None:
         """
@@ -656,6 +663,7 @@ class MCPServerManager:
         """
         verbose_logger.debug("Loading MCP Servers from config-----")
         self._upstream_initialize_instructions_by_server_id.clear()
+        self._upstream_initialize_server_version_by_server_id.clear()
         self._upstream_initialize_instructions_probed_at.clear()
 
         # Track which aliases have been used to ensure only first occurrence is used
@@ -3645,6 +3653,7 @@ class MCPServerManager:
 
         verbose_logger.debug("Loading MCP servers from database into registry...")
         self._upstream_initialize_instructions_by_server_id.clear()
+        self._upstream_initialize_server_version_by_server_id.clear()
         self._upstream_initialize_instructions_probed_at.clear()
 
         # perform authz check to filter the mcp servers user has access to

@@ -3783,11 +3783,33 @@ class TestMCPServerManagerUpstreamInstructionsCache:
         manager._remember_upstream_initialize_instructions(fake_server, fake_client)
         assert manager._upstream_initialize_instructions_by_server_id.get("srv") is None
 
+    def test_remember_stores_server_version(self):
+        """_remember_upstream_initialize_instructions also records upstream serverInfo.version."""
+        manager = MCPServerManager()
+        fake_server = MagicMock(server_id="srv")
+        fake_client = MagicMock(
+            _last_initialize_instructions=None,
+            _last_initialize_server_version=" v2026.09.01.2 ",
+        )
+        manager._remember_upstream_initialize_instructions(fake_server, fake_client)
+        assert manager._upstream_initialize_server_version_by_server_id.get("srv") == "v2026.09.01.2"
+        assert manager._upstream_initialize_instructions_by_server_id.get("srv") is None
+
+    def test_remember_keeps_previous_server_version_when_missing(self):
+        """A client without a captured version does not clobber the cached one."""
+        manager = MCPServerManager()
+        manager._upstream_initialize_server_version_by_server_id["srv"] = "v1"
+        fake_server = MagicMock(server_id="srv")
+        fake_client = MagicMock(_last_initialize_instructions=None, _last_initialize_server_version=None)
+        manager._remember_upstream_initialize_instructions(fake_server, fake_client)
+        assert manager._upstream_initialize_server_version_by_server_id.get("srv") == "v1"
+
     @pytest.mark.asyncio
     async def test_load_servers_from_config_clears_cache(self):
-        """Reloading config clears any previously cached upstream instructions."""
+        """Reloading config clears any previously cached upstream instructions and versions."""
         manager = MCPServerManager()
         manager._upstream_initialize_instructions_by_server_id["old"] = "stale"
+        manager._upstream_initialize_server_version_by_server_id["old"] = "v0"
         await manager.load_servers_from_config(
             mcp_servers_config={
                 "fresh_srv": {
@@ -3797,6 +3819,7 @@ class TestMCPServerManagerUpstreamInstructionsCache:
             }
         )
         assert manager._upstream_initialize_instructions_by_server_id.get("old") is None
+        assert manager._upstream_initialize_server_version_by_server_id.get("old") is None
 
     @pytest.mark.asyncio
     async def test_load_servers_reads_instructions_from_config(self):

@@ -21,3 +21,9 @@ _mcp_gateway_initialize_instructions: ContextVar[Optional[str]] = ContextVar(
 # Per-request scoped server name; set in MCP HTTP/SSE handlers when the path
 # identifies exactly one upstream server. Never populated from client-supplied headers.
 _mcp_gateway_server_name: ContextVar[Optional[str]] = ContextVar("_mcp_gateway_server_name", default=None)
+
+# Per-request scoped server version (upstream InitializeResult.serverInfo.version);
+# set alongside _mcp_gateway_server_name so a single-server endpoint reports the
+# upstream's version instead of the gateway constant. Public name on purpose: it is
+# read from server.py and the underscore siblings above already trip reportPrivateUsage.
+mcp_gateway_server_version: ContextVar[Optional[str]] = ContextVar("mcp_gateway_server_version", default=None)
