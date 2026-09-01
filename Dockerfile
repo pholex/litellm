@@ -40,8 +40,8 @@ COPY --from=uvbin /uvx /usr/local/bin/uvx
 RUN apk add --no-cache \
     bash \
     gcc \
-    python3 \
-    python3-dev \
+    python-3.13 \
+    python-3.13-dev \
     rust \
     openssl \
     openssl-dev \
@@ -64,7 +64,7 @@ RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-gr
     --extra proxy-runtime \
     --extra extra_proxy \
     --extra semantic-router \
-    --python python3
+    --python python3.13
 
 # Copy full source tree
 COPY . .
@@ -84,7 +84,7 @@ RUN uv sync --frozen --no-default-groups --no-editable \
     --extra proxy-runtime \
     --extra extra_proxy \
     --extra semantic-router \
-    --python python3
+    --python python3.13
 
 RUN HOME=/opt/prisma XDG_CACHE_HOME=/opt/prisma/.cache PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries \
     npm_config_cache=/root/.npm \
@@ -99,7 +99,7 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 USER root
 
 # node (without npm) is required by the prisma CLI at runtime
-RUN apk add --no-cache bash openssl tzdata nodejs python3 libsndfile
+RUN apk add --no-cache bash openssl tzdata nodejs python-3.13 libsndfile
 
 WORKDIR /app
 ENV PATH="/app/.venv/bin:${PATH}" \
