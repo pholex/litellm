@@ -40,8 +40,6 @@ COPY --from=uvbin /uvx /usr/local/bin/uvx
 RUN apk add --no-cache \
     bash \
     gcc \
-    python-3.13 \
-    python-3.13-dev \
     rust \
     openssl \
     openssl-dev \
@@ -49,8 +47,15 @@ RUN apk add --no-cache \
     npm \
     libsndfile
 
+# Python comes from uv's managed CPython (python-build-standalone), not the
+# Wolfi apk repo: the base image is digest pinned while apk resolves against the
+# live repo, so its python3 drifts (3.14 today) and links against a newer glibc
+# than the pinned base ships. The install dir is fixed so the runtime stage can
+# copy the interpreter the venv symlinks point at.
 ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
     UV_LINK_MODE=copy \
+    UV_PYTHON_INSTALL_DIR=/opt/uv/python \
+    UV_PYTHON_PREFERENCE=only-managed \
     PATH="/app/.venv/bin:${PATH}"
 
 # Copy dependency metadata first for layer caching
@@ -64,7 +69,7 @@ RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-gr
     --extra proxy-runtime \
     --extra extra_proxy \
     --extra semantic-router \
-    --python python3.13
+    --python 3.13
 
 # Copy full source tree
 COPY . .
@@ -84,7 +89,7 @@ RUN uv sync --frozen --no-default-groups --no-editable \
     --extra proxy-runtime \
     --extra extra_proxy \
     --extra semantic-router \
-    --python python3.13
+    --python 3.13
 
 RUN HOME=/opt/prisma XDG_CACHE_HOME=/opt/prisma/.cache PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries \
     npm_config_cache=/root/.npm \
@@ -99,7 +104,7 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 USER root
 
 # node (without npm) is required by the prisma CLI at runtime
-RUN apk add --no-cache bash openssl tzdata nodejs python-3.13 libsndfile
+RUN apk add --no-cache bash openssl tzdata nodejs libsndfile
 
 WORKDIR /app
 ENV PATH="/app/.venv/bin:${PATH}" \
@@ -112,6 +117,7 @@ ENV PATH="/app/.venv/bin:${PATH}" \
 # the rest of the builder's /app is source and build metadata that must not
 # ship (manifest-scanning tools attribute everything in it to this image).
 # entrypoint.sh invokes litellm/proxy/prisma_migration.py by source path.
+COPY --from=builder /opt/uv/python /opt/uv/python
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/docker /app/docker
 COPY --from=builder /app/schema.prisma /app/schema.prisma
