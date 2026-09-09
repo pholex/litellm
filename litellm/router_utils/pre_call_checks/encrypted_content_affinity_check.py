@@ -276,6 +276,25 @@ class EncryptedContentAffinityCheck(CustomLogger):
             request_kwargs["_encrypted_content_affinity_pinned"] = True
             return boundary_matches
 
+        # Deployments that strip foreign encrypted reasoning items themselves
+        # (litellm_params drop_foreign_reasoning_items, tokenweave fork) are not
+        # doomed: a model switch mid-session is a legitimate Codex workflow, so
+        # route normally among them instead of failing fast.
+        strippers = [
+            d
+            for d in typed_healthy_deployments
+            if callable(getattr(d.get("litellm_params"), "get", None))
+            and d.get("litellm_params").get("drop_foreign_reasoning_items")
+        ]
+        if strippers:
+            verbose_router_logger.debug(
+                "EncryptedContentAffinityCheck: model_id=%s belongs to another model group; "
+                "%d deployment(s) strip foreign reasoning items, routing normally",
+                model_id,
+                len(strippers),
+            )
+            return strippers
+
         # Dispatching to a non-peer would guarantee an upstream
         # `invalid_encrypted_content` 400, so fail fast with a clearer error.
         raise await self._unavailable_origin_error(

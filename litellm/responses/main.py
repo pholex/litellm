@@ -978,6 +978,48 @@ def responses(
                 reasoning["summary"] = _summary_override
             local_vars["reasoning"] = reasoning
 
+        # Per-deployment stripping of encrypted reasoning items produced by a
+        # different deployment (litellm_params drop_foreign_reasoning_items).
+        # Codex resends every prior reasoning item (store:false +
+        # include reasoning.encrypted_content) on each turn; when the user
+        # switches model mid-session, OpenAI-family models on Bedrock reject the
+        # foreign blobs ("invalid encrypted reasoning" on gpt-6-astra,
+        # "encrypted content missing recognized prefix" on gpt-5.6) and the
+        # request silently lands on the fallback model. With
+        # encrypted_content_affinity enabled every emitted item is tagged with
+        # its origin model_id (litellm_enc:... / encitem_...), so keep only the
+        # items this deployment produced itself; untagged items cannot be
+        # verified and are dropped as well. Reasoning items without
+        # encrypted_content are harmless and left untouched.
+        if kwargs.get("drop_foreign_reasoning_items") and isinstance(input, list):
+            _own_model_id = kwargs.get("model_info", {}).get("id") if isinstance(kwargs.get("model_info"), dict) else None
+            _kept_input: list = []
+            _dropped_reasoning = 0
+            for _item in input:
+                if isinstance(_item, dict) and _item.get("type") == "reasoning":
+                    _enc = _item.get("encrypted_content")
+                    if isinstance(_enc, str) and _enc:
+                        _origin_model_id = None
+                        _iid = _item.get("id")
+                        if isinstance(_iid, str):
+                            _decoded_iid = ResponsesAPIRequestUtils._decode_encrypted_item_id(_iid)
+                            if _decoded_iid:
+                                _origin_model_id = _decoded_iid.get("model_id")
+                        if _origin_model_id is None:
+                            _origin_model_id, _ = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(_enc)
+                        if _own_model_id is None or _origin_model_id is None or str(_origin_model_id) != str(_own_model_id):
+                            _dropped_reasoning += 1
+                            continue
+                _kept_input.append(_item)
+            if _dropped_reasoning:
+                verbose_logger.debug(
+                    "drop_foreign_reasoning_items: dropped %d encrypted reasoning item(s) not produced by deployment %s",
+                    _dropped_reasoning,
+                    _own_model_id,
+                )
+                input = _kept_input
+                local_vars["input"] = input
+
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
 

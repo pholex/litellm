@@ -3170,6 +3170,7 @@ all_litellm_params = (
         "drop_namespace_tools",
         "allowed_tool_types",
         "reasoning_summary_override",
+        "drop_foreign_reasoning_items",
         "prompt_label",
         "shared_session",
         "search_tool_name",

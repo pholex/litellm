@@ -1659,3 +1659,44 @@ async def test_model_group_encrypted_content_affinity_overrides_global_deploymen
         assert request_kwargs.get("_encrypted_content_affinity_pinned") is True
     finally:
         router.discard()
+
+
+@pytest.mark.asyncio
+async def test_affinity_routes_normally_when_target_deployments_strip_foreign_items():
+    """tokenweave fork: a model-group switch must not fail fast when the
+    requested group's deployments declare drop_foreign_reasoning_items —
+    they strip the foreign encrypted reasoning items themselves."""
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    check = EncryptedContentAffinityCheck(router=None, enable_global_affinity=True)
+    stripper = {
+        "model_name": "gpt-6-astra",
+        "litellm_params": {
+            "model": "openai/us.openai.gpt-6-astra",
+            "api_base": "https://bedrock-runtime.example/openai/v1",
+            "api_key": "k",
+            "drop_foreign_reasoning_items": True,
+        },
+        "model_info": {"id": "gpt6-deploy"},
+    }
+    plain = {
+        "model_name": "gpt-6-astra",
+        "litellm_params": {"model": "openai/x", "api_base": "https://other.example", "api_key": "k2"},
+        "model_info": {"id": "plain-deploy"},
+    }
+    wrapped = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("rsn_blob", "deepseek-deploy")
+    request_kwargs = {
+        "litellm_metadata": {},
+        "input": [{"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": wrapped}],
+    }
+    result = await check.async_filter_deployments(
+        model="gpt-6-astra",
+        healthy_deployments=[stripper, plain],
+        messages=None,
+        request_kwargs=request_kwargs,
+    )
+    assert result == [stripper]
+    assert request_kwargs["litellm_metadata"]["encrypted_content_affinity_enabled"] is True
+    assert "_encrypted_content_affinity_pinned" not in request_kwargs
