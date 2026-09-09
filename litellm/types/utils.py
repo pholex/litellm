@@ -3169,6 +3169,7 @@ all_litellm_params = (
         "use_chat_completions_api",
         "drop_namespace_tools",
         "allowed_tool_types",
+        "reasoning_summary_override",
         "prompt_label",
         "shared_session",
         "search_tool_name",

@@ -960,6 +960,24 @@ def responses(
                 )
                 local_vars["tools"] = tools
 
+        # Per-deployment normalisation of reasoning.summary (litellm_params
+        # reasoning_summary_override). Bedrock-hosted xAI grok-4.6 and OpenAI
+        # gpt-6-astra reject every summary value except "auto"/null
+        # ("Unsupported parameter: 'reasoning.summary' is not supported with
+        # the ... model"), while Codex sends "detailed" by default. Without a
+        # fallback chain (grok) the client sees a hard failure; with one
+        # (gpt-6 -> gpt-5.6-sol) the request silently lands on another model.
+        # "auto"/"concise"/"detailed" replace the requested value; "drop"
+        # removes the key entirely. Only touches requests that carry a summary.
+        _summary_override = kwargs.get("reasoning_summary_override")
+        if _summary_override is not None and isinstance(reasoning, dict) and "summary" in reasoning:
+            reasoning = dict(reasoning)
+            if _summary_override == "drop":
+                reasoning.pop("summary", None)
+            else:
+                reasoning["summary"] = _summary_override
+            local_vars["reasoning"] = reasoning
+
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
 
