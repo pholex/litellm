@@ -62,6 +62,7 @@ from litellm.utils import (
     ProviderConfigManager,
     client,
     filter_tools_by_allowed_types,
+    flatten_tool_schema_unions,
 )
 
 if TYPE_CHECKING:
@@ -959,6 +960,16 @@ def responses(
                     tools=list(tools), allowed_tool_types=_allowed_tool_types
                 )
                 local_vars["tools"] = tools
+
+        # Per-deployment flattening of nested oneOf/anyOf in tool schemas
+        # (litellm_params flatten_tool_schema_unions). Bedrock-hosted grok-4.7
+        # rejects the whole request ("The task request was rejected by the
+        # target") when a tool schema nests a union inside a union, which
+        # Codex's built-in automation_update tool does. Runs after the
+        # allowlist so dropped tools are not processed.
+        if kwargs.get("flatten_tool_schema_unions") and tools:
+            tools = flatten_tool_schema_unions(list(tools))
+            local_vars["tools"] = tools
 
         # Per-deployment normalisation of reasoning.summary (litellm_params
         # reasoning_summary_override). Bedrock-hosted xAI grok-4.6 and OpenAI

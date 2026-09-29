@@ -174,6 +174,7 @@ from litellm.utils import (
     validate_and_fix_openai_tools,
     drop_namespace_tools,
     filter_tools_by_allowed_types,
+    flatten_tool_schema_unions,
     validate_and_fix_thinking_param,
     validate_chat_completion_tool_choice,
     validate_openai_optional_params,
@@ -4823,6 +4824,11 @@ def completion(  # type: ignore
         tools = filter_tools_by_allowed_types(
             tools=tools, allowed_tool_types=_allowed_tool_types
         )
+    # flatten_tool_schema_unions: see litellm.utils.flatten_tool_schema_unions
+    # (grok-4.7 on Bedrock rejects nested oneOf/anyOf). Idempotent, so the
+    # second pass on the /responses->chat bridge path is harmless.
+    if kwargs.get("flatten_tool_schema_unions") and tools is not None:
+        tools = flatten_tool_schema_unions(tools)
     # validate tool_choice
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
     # validate optional params

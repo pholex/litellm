@@ -7379,6 +7379,125 @@ def filter_tools_by_allowed_types(
     return filtered or None
 
 
+_SCHEMA_UNION_KEYS = ("oneOf", "anyOf")
+_SCHEMA_ANNOTATION_KEYS = ("description", "title")
+_SCHEMA_MAX_REF_DEPTH = 32
+
+
+def _flatten_json_schema_unions(schema: Any) -> Any:
+    """Inline local ``$ref``s and splice nested oneOf/anyOf into their parent.
+
+    Returns a new object; the input is never mutated. Only local refs
+    (``#/$defs/...`` / ``#/definitions/...``) are inlined; unresolvable or
+    cyclic refs (beyond ``_SCHEMA_MAX_REF_DEPTH``) are left untouched together
+    with the defs they point to.
+    """
+    if not isinstance(schema, dict):
+        return schema
+    defs: Dict[str, Any] = {}
+    for defs_key in ("$defs", "definitions"):
+        if isinstance(schema.get(defs_key), dict):
+            for name, value in schema[defs_key].items():
+                defs[f"#/{defs_key}/{name}"] = value
+    unresolved = False
+
+    def _resolve(node: Any, depth: int) -> Any:
+        nonlocal unresolved
+        if isinstance(node, list):
+            return [_resolve(v, depth) for v in node]
+        if not isinstance(node, dict):
+            return node
+        ref = node.get("$ref")
+        if isinstance(ref, str):
+            if ref in defs and depth < _SCHEMA_MAX_REF_DEPTH:
+                target = _resolve(copy.deepcopy(defs[ref]), depth + 1)
+                siblings = {k: _resolve(v, depth) for k, v in node.items() if k != "$ref"}
+                if isinstance(target, dict):
+                    return {**target, **siblings}
+                return target
+            unresolved = True
+        return {
+            k: _resolve(v, depth)
+            for k, v in node.items()
+            if k not in ("$defs", "definitions")
+        }
+
+    def _splice(node: Any) -> Any:
+        if isinstance(node, list):
+            return [_splice(v) for v in node]
+        if not isinstance(node, dict):
+            return node
+        out = {k: _splice(v) for k, v in node.items()}
+        for key in _SCHEMA_UNION_KEYS:
+            variants = out.get(key)
+            if not isinstance(variants, list):
+                continue
+            flat: list = []
+            for variant in variants:
+                inner_keys = (
+                    [k for k in _SCHEMA_UNION_KEYS if k in variant]
+                    if isinstance(variant, dict)
+                    else []
+                )
+                # A variant that is *only* another union (plus annotations) is
+                # redundant nesting: its branches become branches of the parent.
+                if (
+                    len(inner_keys) == 1
+                    and isinstance(variant[inner_keys[0]], list)
+                    and set(variant) - set(_SCHEMA_ANNOTATION_KEYS) == {inner_keys[0]}
+                ):
+                    flat.extend(variant[inner_keys[0]])
+                else:
+                    flat.append(variant)
+            out[key] = flat
+        return out
+
+    result = _splice(_resolve(schema, 0))
+    if unresolved:
+        # Keep the defs so the refs we could not inline still resolve upstream.
+        for defs_key in ("$defs", "definitions"):
+            if defs_key in schema and isinstance(result, dict):
+                result[defs_key] = copy.deepcopy(schema[defs_key])
+    return result
+
+
+def flatten_tool_schema_unions(tools: Optional[List[Any]]) -> Optional[List[Any]]:
+    """Flatten nested oneOf/anyOf in tool parameter schemas (litellm_param
+    ``flatten_tool_schema_unions``, tokenweave fork).
+
+    Bedrock-hosted xai.grok-4.7 rejects the whole request ("The task request
+    was rejected by the target", code invalid_prompt/validation_error) when any
+    tool schema nests a union inside a union after ``$ref`` resolution. Codex's
+    built-in ``mcp__codex_app.automation_update`` tool has exactly that shape
+    (top-level oneOf whose branches are themselves oneOf, all via ``$defs``),
+    so every Codex request to grok-4.7 failed. Inlining refs and splicing the
+    inner branches into the parent is semantically equivalent for the model
+    (oneOf-of-oneOf == one flat oneOf) and was verified to be accepted
+    (2026-09-29, 6 flat variants -> 200).
+
+    Handles Responses-style tools (``parameters``), Chat-style tools
+    (``function.parameters``) and Codex ``namespace`` tools (recursing into
+    their sub-``tools``). Idempotent; returns new tool dicts.
+    """
+    if not tools:
+        return tools
+
+    def _fix(tool: Any) -> Any:
+        if not isinstance(tool, dict):
+            return tool
+        tool = dict(tool)
+        if isinstance(tool.get("parameters"), dict):
+            tool["parameters"] = _flatten_json_schema_unions(tool["parameters"])
+        fn = tool.get("function")
+        if isinstance(fn, dict) and isinstance(fn.get("parameters"), dict):
+            tool["function"] = {**fn, "parameters": _flatten_json_schema_unions(fn["parameters"])}
+        if tool.get("type") == "namespace" and isinstance(tool.get("tools"), list):
+            tool["tools"] = [_fix(t) for t in tool["tools"]]
+        return tool
+
+    return [_fix(t) for t in tools]
+
+
 def validate_and_fix_thinking_param(
     thinking: Optional["AnthropicThinkingParam"],
 ) -> Optional["AnthropicThinkingParam"]:
