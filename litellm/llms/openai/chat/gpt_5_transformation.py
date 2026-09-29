@@ -70,7 +70,43 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         # than a substring check) makes this boundary explicit and avoids any ambiguity
         # if future model names coincidentally contain "gpt-5-chat" as an interior run.
         _normalized = model.split("/")[-1]  # strip provider prefix, e.g. "openai/"
+        if cls._is_gpt_6_family(model):
+            return True
         return "gpt-5" in model and not _normalized.startswith("gpt-5-chat")
+
+    # Bedrock names OpenAI models "openai.gpt-6-sol" and wraps them in cross-Region
+    # inference profiles ("us.openai.gpt-6-astra", "global.openai.gpt-6-sol").
+    _BEDROCK_PROFILE_PREFIXES = ("us.", "eu.", "apac.", "au.", "jp.", "ca.", "us-gov.", "global.")
+
+    @classmethod
+    def _bare_model_name(cls, model: str) -> str:
+        """Strip provider path and Bedrock profile/vendor prefixes.
+
+        ``openai/us.openai.gpt-6-astra`` -> ``gpt-6-astra``;
+        ``openai/openai.gpt-5.6-sol`` -> ``gpt-5.6-sol``; ``gpt-5.4`` unchanged.
+        """
+        name = model.split("/")[-1]
+        for prefix in cls._BEDROCK_PROFILE_PREFIXES:
+            if name.startswith(prefix):
+                name = name[len(prefix) :]
+                break
+        if name.startswith("openai."):
+            name = name[len("openai.") :]
+        return name
+
+    @classmethod
+    def _is_gpt_6_family(cls, model: str) -> bool:
+        """GPT-6 (astra/sol/luna, 2026-09) keeps every GPT-5 reasoning-model quirk.
+
+        Verified against Bedrock bedrock-runtime /openai/v1/chat/completions
+        (2026-09-29): ``max_tokens`` 400 ("not supported with this model") while
+        ``max_completion_tokens`` 200; temperature != 1 400; function tools +
+        reasoning_effort 400 ("use /v1/responses"); reasoning_effort xhigh/max 200.
+        Before this, gpt-6 names fell through to the plain GPT config, so
+        ``max_tokens`` went upstream verbatim and every such request silently
+        landed on the fallback model.
+        """
+        return cls._bare_model_name(model).startswith("gpt-6")
 
     @classmethod
     def is_model_gpt_5_search_model(cls, model: str) -> bool:
@@ -103,8 +139,18 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
 
     @classmethod
     def is_model_gpt_5_4_plus_model(cls, model: str) -> bool:
-        """Check if the model is gpt-5.4 or newer (5.4, 5.5, 5.6, etc., including pro)."""
-        model_name = model.split("/")[-1]
+        """Check if the model is gpt-5.4 or newer (5.4, 5.5, 5.6, etc., including pro).
+
+        GPT-6 counts as "5.4+" too, and Bedrock names (``openai.gpt-5.6-sol``,
+        ``us.openai.gpt-6-astra``) are normalised first: this flag drives the
+        tools + reasoning_effort -> Responses API bridge in ``main.py``, and
+        without the normalisation Bedrock-hosted models never bridged, 400ing
+        with "Function tools with reasoning_effort are not supported ... in
+        /v1/chat/completions" and falling back.
+        """
+        if cls._is_gpt_6_family(model):
+            return True
+        model_name = cls._bare_model_name(model)
         if not model_name.startswith("gpt-5."):
             return False
         try:
@@ -121,7 +167,11 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         Looks up ``supports_{level}_reasoning_effort`` in the model map via
         the shared ``_supports_factory`` helper.
         Returns False for unknown models (safe fallback).
+        GPT-6 is not in the model map yet; every GPT-6 model accepts ``xhigh``
+        (verified on Bedrock 2026-09-29), so keep it rather than dropping it.
         """
+        if level == "xhigh" and cls._is_gpt_6_family(model):
+            return True
         return _supports_factory(
             model=model,
             custom_llm_provider=None,
