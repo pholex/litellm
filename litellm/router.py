@@ -9290,19 +9290,33 @@ class Router:
 
     def get_listing_hidden_model_names(self) -> Set[str]:
         """
-        Returns model_names hidden from client listings (e.g. `/v1/models`) by
-        naming convention — currently any name ending in ``-fallback``.
+        Returns model_names hidden from client listings (e.g. `/v1/models`): any name
+        ending in ``-fallback``, plus groups whose deployments all set
+        ``model_info.hide_from_model_list: true``.
 
         These are internal fallback targets (referenced from router_settings
         fallbacks). Hiding is presentation-only: they remain fully routable, so
         an in-flight fallback still works; they just don't clutter the model
         list shown to end users.
         """
-        return {
+        hidden = {
             name
             for name in (self.get_model_names() or [])
             if name.endswith("-fallback")
         }
+        # Opt-in per deployment: model_info.hide_from_model_list: true hides the model
+        # group from client listings (e.g. image/video models, deprecated chat models)
+        # while it stays fully callable by name. Hidden only when every deployment of
+        # the group opts in, so one visible deployment keeps the group listed.
+        flags: Dict[str, bool] = {}
+        for deployment in self.get_model_list() or []:
+            name = deployment.get("model_name") or ""
+            if not name:
+                continue
+            opted = (deployment.get("model_info") or {}).get("hide_from_model_list") is True
+            flags[name] = flags.get(name, True) and opted
+        hidden.update(name for name, opted in flags.items() if opted)
+        return hidden
 
     @staticmethod
     def _are_all_deployments_blocked(
