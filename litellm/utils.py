@@ -5395,6 +5395,11 @@ def _get_model_info_helper(
                 ),
                 output_cost_per_second=_model_info.get("output_cost_per_second", None),
                 output_cost_per_second_1080p=_model_info.get("output_cost_per_second_1080p", None),
+                output_cost_per_second_480p=_model_info.get("output_cost_per_second_480p", None),
+                output_cost_per_second_720p=_model_info.get("output_cost_per_second_720p", None),
+                output_cost_per_second_768p=_model_info.get("output_cost_per_second_768p", None),
+                output_cost_per_second_2k=_model_info.get("output_cost_per_second_2k", None),
+                output_cost_per_second_4k=_model_info.get("output_cost_per_second_4k", None),
                 output_cost_per_video_per_second=_model_info.get("output_cost_per_video_per_second", None),
                 output_cost_per_image=_model_info.get("output_cost_per_image", None),
                 output_cost_per_image_token=_model_info.get("output_cost_per_image_token", None),
@@ -8728,6 +8733,10 @@ class ProviderConfigManager:
             from litellm.llms.vertex_ai.videos.transformation import VertexAIVideoConfig
 
             return VertexAIVideoConfig()
+        elif LlmProviders.MINIMAX == provider:
+            from litellm.llms.minimax.videos.transformation import MinimaxVideoConfig
+
+            return MinimaxVideoConfig()
         elif LlmProviders.RUNWAYML == provider:
             from litellm.llms.runwayml.videos.transformation import RunwayMLVideoConfig
 

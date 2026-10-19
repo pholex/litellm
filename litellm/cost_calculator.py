@@ -726,6 +726,30 @@ def _get_provider_for_cost_calc(
     return custom_llm_provider
 
 
+def _video_input_image_cost(
+    model: str,
+    custom_llm_provider: Optional[str],
+    model_info: Optional[Any],
+    usage: object,
+) -> float:
+    """Billable input images on video tasks (MiniMax H3 bills images beyond a free quota).
+    Backported from upstream BerriAI/litellm #43705."""
+    if not isinstance(usage, dict):
+        return 0.0
+    billable = usage.get("billable_input_image_count")
+    if not isinstance(billable, int) or billable <= 0:
+        return 0.0
+    rate = model_info.get("input_cost_per_image") if isinstance(model_info, dict) else None
+    if rate is None:
+        try:
+            rate = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider).get(
+                "input_cost_per_image"
+            )
+        except Exception:
+            rate = None
+    return billable * rate if isinstance(rate, (int, float)) else 0.0
+
+
 def _deployment_per_image_cost(
     completion_response: Any,
     router_model_id: Optional[str] = None,
@@ -1431,6 +1455,11 @@ def completion_cost(
                                 custom_llm_provider=custom_llm_provider,
                                 model_info=_video_model_info,
                                 video_resolution=video_resolution,
+                            ) + _video_input_image_cost(
+                                model,
+                                custom_llm_provider,
+                                _video_model_info,
+                                getattr(completion_response, "usage", None),
                             )
                     # Fallback to default video cost calculation if no duration available
                     return default_video_cost_calculator(
