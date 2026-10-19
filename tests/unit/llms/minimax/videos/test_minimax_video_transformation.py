@@ -1265,7 +1265,6 @@ class TestMinimaxVideoInputBilling:
         assert custom_cost > self._create_cost(model, 0, router_model_id=deployment_id)
 
     @pytest.mark.parametrize("model", ["MiniMax-H3", "MiniMax-H3-Max"])
-    @pytest.mark.xfail(reason='fork: video cost path does not read router_model_id cost-map entries; proxy uses deployment model_info (verified end-to-end)', strict=True)
     def test_a_deployment_pricing_only_seconds_bills_images_at_the_cost_map_rate(self, model, monkeypatch):
         from litellm import get_model_info
 

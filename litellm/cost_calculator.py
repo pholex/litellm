@@ -726,6 +726,34 @@ def _get_provider_for_cost_calc(
     return custom_llm_provider
 
 
+def _deployment_model_info(
+    litellm_logging_obj: Optional[Any],
+    custom_pricing: Optional[bool],
+    router_model_id: Optional[str],
+) -> Optional[ModelInfo]:
+    """Deployment-level pricing for video calls. Backported from upstream BerriAI/litellm main:
+    prefer the cost-map entry the router registers under the deployment id, then model_info under
+    either `metadata` or `litellm_metadata` (proxy /v1/videos stores it under litellm_metadata, so
+    reading only `metadata` silently fell back to the global cost-map price)."""
+    if not custom_pricing:
+        return None
+    if router_model_id is not None:
+        registered = litellm.model_cost.get(router_model_id)
+        if isinstance(registered, dict):
+            return cast(ModelInfo, registered)
+    if litellm_logging_obj is None:
+        return None
+    litellm_params = getattr(litellm_logging_obj, "litellm_params", None)
+    if not litellm_params:
+        return None
+    for metadata_key in ("metadata", "litellm_metadata"):
+        metadata = litellm_params.get(metadata_key) or {}
+        model_info = metadata.get("model_info") if isinstance(metadata, dict) else None
+        if model_info is not None:
+            return cast(ModelInfo, model_info)
+    return None
+
+
 def _video_input_image_cost(
     model: str,
     custom_llm_provider: Optional[str],
@@ -1422,12 +1450,9 @@ def completion_cost(
                 elif call_type in _VIDEO_CALL_TYPES:
                     ### VIDEO GENERATION COST CALCULATION ###
                     # Extract custom model_info for deployment-specific pricing
-                    _video_model_info: Optional[ModelInfo] = None
-                    if custom_pricing and litellm_logging_obj is not None:
-                        _litellm_params = getattr(litellm_logging_obj, "litellm_params", None)
-                        if _litellm_params is not None:
-                            _metadata = _litellm_params.get("metadata", {}) or {}
-                            _video_model_info = _metadata.get("model_info", None)
+                    _video_model_info: Optional[ModelInfo] = _deployment_model_info(
+                        litellm_logging_obj, custom_pricing, router_model_id
+                    )
 
                     usage_obj = getattr(completion_response, "usage", None)
                     duration_seconds: Optional[float] = None
