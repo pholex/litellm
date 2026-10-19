@@ -1031,6 +1031,35 @@ def responses(
                 input = _kept_input
                 local_vars["input"] = input
 
+        # Strip response-only `logprobs` from output_text parts in the input
+        # history. Codex replays prior assistant messages verbatim, and their
+        # output_text parts carry `"logprobs": []`. OpenAI/Mantle ignore it, but
+        # strict upstreams (Volcengine Ark doubao-seed-*) 400 with
+        # `json: unknown field "logprobs"`, so every multi-turn / model-switch
+        # request silently landed on the fallback model. logprobs is meaningless
+        # as input, so it is removed for every provider. Copies are made only
+        # for items that actually change.
+        if isinstance(input, list):
+            _lp_changed = False
+            _lp_input: list = []
+            for _item in input:
+                _content = _item.get("content") if isinstance(_item, dict) else None
+                if isinstance(_content, list) and any(
+                    isinstance(_p, dict) and _p.get("type") == "output_text" and "logprobs" in _p for _p in _content
+                ):
+                    _item = dict(_item)
+                    _item["content"] = [
+                        {k: v for k, v in _p.items() if k != "logprobs"}
+                        if isinstance(_p, dict) and _p.get("type") == "output_text"
+                        else _p
+                        for _p in _content
+                    ]
+                    _lp_changed = True
+                _lp_input.append(_item)
+            if _lp_changed:
+                input = _lp_input
+                local_vars["input"] = input
+
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
 
