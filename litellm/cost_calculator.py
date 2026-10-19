@@ -726,6 +726,59 @@ def _get_provider_for_cost_calc(
     return custom_llm_provider
 
 
+def _deployment_per_image_cost(
+    completion_response: Any,
+    router_model_id: Optional[str] = None,
+    litellm_logging_obj: Optional[Any] = None,
+) -> Optional[float]:
+    """
+    Per-image pricing declared on the deployment (model_info.output_cost_per_image /
+    input_cost_per_image), e.g. Volcengine Ark Seedream behind the `openai/` provider.
+
+    Without this, non-gpt-image models on the openai provider fall through to the
+    DALL-E size/quality cost-map lookup, raise "No pricing information found", and the
+    request ends up with no response cost (no x-litellm-response-cost header, $0 spend).
+
+    Only applies when the deployment explicitly sets output_cost_per_image; returns None
+    otherwise so every existing image pricing path is unchanged.
+    Images counted from usage.generated_images / usage.input_images (Ark), falling back to
+    len(data) for outputs and 0 for inputs.
+    """
+    model_info: Optional[dict] = None
+    if litellm_logging_obj is not None:
+        _litellm_params = getattr(litellm_logging_obj, "litellm_params", None) or {}
+        _metadata = _litellm_params.get("metadata", {}) or {}
+        _mi = _metadata.get("model_info", None)
+        if isinstance(_mi, dict) and _mi.get("output_cost_per_image") is not None:
+            model_info = _mi
+    if model_info is None and router_model_id is not None:
+        _entry = litellm.model_cost.get(router_model_id)
+        if isinstance(_entry, dict) and _entry.get("output_cost_per_image") is not None:
+            model_info = _entry
+    if model_info is None:
+        return None
+
+    def _usage_int(field: str) -> Optional[int]:
+        usage = getattr(completion_response, "usage", None)
+        if usage is None:
+            return None
+        value = usage.get(field) if isinstance(usage, dict) else getattr(usage, field, None)
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    data = getattr(completion_response, "data", None) or []
+    generated = _usage_int("generated_images")
+    if generated is None:
+        generated = len(data)
+    input_images = _usage_int("input_images") or 0
+
+    output_cost = float(model_info["output_cost_per_image"])
+    input_cost = float(model_info.get("input_cost_per_image") or 0.0)
+    return generated * output_cost + input_images * input_cost
+
+
 def _select_model_name_for_cost_calc(
     model: Optional[str],
     completion_response: Optional[Any],
@@ -1325,6 +1378,13 @@ def completion_cost(
                     completion_response, ImageResponse
                 ):
                     ### IMAGE GENERATION COST CALCULATION ###
+                    _per_image_cost = _deployment_per_image_cost(
+                        completion_response=completion_response,
+                        router_model_id=router_model_id,
+                        litellm_logging_obj=litellm_logging_obj,
+                    )
+                    if _per_image_cost is not None:
+                        return _per_image_cost
                     return CostCalculatorUtils.route_image_generation_cost_calculator(
                         model=model,
                         custom_llm_provider=custom_llm_provider,
