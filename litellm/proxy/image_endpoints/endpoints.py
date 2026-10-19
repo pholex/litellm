@@ -1,6 +1,6 @@
 import asyncio
 import traceback
-from typing import List
+from typing import Any, List
 
 import orjson
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, status
@@ -33,6 +33,61 @@ async def uploadfile_to_bytesio(upload: UploadFile) -> io.BytesIO:
     buffer = io.BytesIO(data)
     buffer.name = upload.filename
     return buffer
+
+
+_DATA_URL_MIME_TO_EXT = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/webp": "webp",
+    "image/gif": "gif",
+}
+
+
+def json_images_to_bytesio(images: Any) -> List[io.BytesIO]:
+    """
+    Convert the JSON form of /images/edits input (`"images": [{"image_url": "data:..."}]`,
+    as sent by Codex's built-in image_gen tool and accepted by OpenAI) into the BytesIO
+    list that litellm.image_edit expects for `image`.
+
+    Only inline base64 data URLs are supported. `file_id` references (OpenAI Files API)
+    and remote http(s) URLs are rejected with 422 instead of being fetched by the proxy.
+    """
+    import base64
+    import binascii
+
+    if not isinstance(images, list) or len(images) == 0:
+        raise HTTPException(status_code=422, detail="'images' must be a non-empty list")
+
+    buffers: List[io.BytesIO] = []
+    for idx, item in enumerate(images):
+        image_url = item.get("image_url") if isinstance(item, dict) else None
+        if isinstance(image_url, dict):  # tolerate {"image_url": {"url": "..."}}
+            image_url = image_url.get("url")
+        if not isinstance(image_url, str):
+            if isinstance(item, dict) and item.get("file_id"):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"images[{idx}]: file_id references are not supported by this proxy; send an inline data URL",
+                )
+            raise HTTPException(status_code=422, detail=f"images[{idx}]: missing 'image_url'")
+        if not image_url.startswith("data:"):
+            raise HTTPException(
+                status_code=422,
+                detail=f"images[{idx}]: only inline base64 data URLs are supported",
+            )
+        header, sep, payload = image_url.partition(",")
+        if not sep or ";base64" not in header:
+            raise HTTPException(status_code=422, detail=f"images[{idx}]: data URL must be base64-encoded")
+        mime = header[len("data:") :].split(";", 1)[0].strip().lower()
+        try:
+            raw = base64.b64decode(payload, validate=True)
+        except (binascii.Error, ValueError):
+            raise HTTPException(status_code=422, detail=f"images[{idx}]: invalid base64 payload")
+        buffer = io.BytesIO(raw)
+        buffer.name = f"image_{idx}.{_DATA_URL_MIME_TO_EXT.get(mime, 'png')}"
+        buffers.append(buffer)
+    return buffers
 
 
 async def batch_to_bytesio(
@@ -284,6 +339,9 @@ async def image_edit_api(
     mask_files = await batch_to_bytesio(mask)
     if image_files:
         data["image"] = image_files
+    elif "images" in data and "image" not in data:
+        # JSON body form (Codex image_gen / OpenAI JSON edits): images=[{"image_url": "data:..."}]
+        data["image"] = json_images_to_bytesio(data.pop("images"))
     if mask_files:
         data["mask"] = mask_files
 

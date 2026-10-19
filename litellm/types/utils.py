@@ -2319,6 +2319,8 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
         self.quality = kwargs.get("quality", None)
         self.output_format = kwargs.get("output_format", None)
         self.size = kwargs.get("size", None)
+        # gpt-image returns the effective background; Codex image_gen reads it to track transparency.
+        self.background = kwargs.get("background", None)
         self._hidden_params = hidden_params or {}
 
     def __contains__(self, key):

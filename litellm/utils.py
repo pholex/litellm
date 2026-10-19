@@ -2950,6 +2950,13 @@ def get_optional_params_image_gen(
             continue
         passed_params[k] = v
 
+    # Provider-declared params (e.g. gpt-image `background`, `moderation`, `output_format`,
+    # `output_compression`) must be part of default_params, otherwise _get_non_default_params
+    # filters them out and they never reach the provider (Codex image_gen's opaque/transparent
+    # switch was silently dropped). Mirrors upstream BerriAI/litellm main.
+    provider_supported_params = (
+        tuple(provider_config.get_supported_openai_params(model=model or "")) if provider_config is not None else ()
+    )
     default_params = {
         "n": None,
         "quality": None,
@@ -2960,6 +2967,7 @@ def get_optional_params_image_gen(
         "imageConfig": None,
         "tools": None,
         "web_search_options": None,
+        **{k: None for k in provider_supported_params},
     }
 
     non_default_params = _get_non_default_params(
