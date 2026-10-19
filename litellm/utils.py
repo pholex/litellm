@@ -8737,6 +8737,10 @@ class ProviderConfigManager:
             from litellm.llms.minimax.videos.transformation import MinimaxVideoConfig
 
             return MinimaxVideoConfig()
+        elif LlmProviders.VOLCENGINE == provider:
+            from litellm.llms.volcengine.videos.transformation import VolcEngineVideoConfig
+
+            return VolcEngineVideoConfig()
         elif LlmProviders.RUNWAYML == provider:
             from litellm.llms.runwayml.videos.transformation import RunwayMLVideoConfig
 
