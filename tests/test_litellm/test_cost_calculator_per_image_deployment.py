@@ -99,3 +99,72 @@ def test_router_image_generation_records_response_cost():
         assert resp._hidden_params.get("response_cost") == pytest.approx(OUT + IN)
     finally:
         srv.shutdown()
+
+
+HI = 0.08955223881  # ¥0.6 / 6.7
+LO = 0.04477611940  # ¥0.3 / 6.7
+TIERED = {"output_cost_per_image": HI, "output_cost_per_image_tiers": [{"max_pixels": 2610000, "output_cost_per_image": LO}],
+          "input_cost_per_image": IN, "free_input_images": 1}
+
+
+@pytest.mark.parametrize("size,expected", [("1600x1600", LO), ("1616x1616", HI), ("2048x2048", HI), ("1615x1616", LO), ("1500x1700", LO)])
+def test_pixel_tiers_from_response_size(size, expected):
+    r = _resp(n=1)
+    r.size = size
+    assert _deployment_per_image_cost(r, litellm_logging_obj=_logging_obj(TIERED)) == pytest.approx(expected)
+
+
+def test_pixel_tiers_from_request_size_when_response_has_none():
+    obj = SimpleNamespace(litellm_params={"metadata": {"model_info": TIERED}}, model_call_details={"optional_params": {"size": "1536x1536"}})
+    assert _deployment_per_image_cost(_resp(n=2), litellm_logging_obj=obj) == pytest.approx(2 * LO)
+
+
+def test_unknown_size_uses_base_price():
+    obj = SimpleNamespace(litellm_params={"metadata": {"model_info": TIERED}}, model_call_details={"optional_params": {"size": "2K"}})
+    assert _deployment_per_image_cost(_resp(n=1), litellm_logging_obj=obj) == pytest.approx(HI)
+
+
+def test_first_input_image_free():
+    r = _resp(usage={"input_images": 3, "generated_images": 1, "output_tokens": 1, "total_tokens": 1}, n=1)
+    r.size = "2048x2048"
+    assert _deployment_per_image_cost(r, litellm_logging_obj=_logging_obj(TIERED)) == pytest.approx(HI + 2 * IN)
+    r1 = _resp(usage={"input_images": 1, "generated_images": 1, "output_tokens": 1, "total_tokens": 1}, n=1)
+    r1.size = "1600x1600"
+    assert _deployment_per_image_cost(r1, litellm_logging_obj=_logging_obj(TIERED)) == pytest.approx(LO)
+
+
+def test_image_response_takes_size_from_ark_items():
+    r = ImageResponse(data=[{"url": "https://x/y.png", "size": "1872x1248"}])
+    assert r.size == "1872x1248"
+    assert ImageResponse(data=[{"url": "u"}], size="1024x1024").size == "1024x1024"
+
+
+def test_router_tiered_cost_end_to_end():
+    srv = http.server.HTTPServer(("127.0.0.1", 0), _Ark)  # Ark stub returns data[].size 1872x1248 (2.34 MP), 1 input image
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "doubao-seedream-5-pro",
+                    "litellm_params": {
+                        "model": "openai/doubao-seedream-5-0-pro-260628",
+                        "api_key": "x",
+                        "api_base": f"http://127.0.0.1:{srv.server_port}/v1",
+                    },
+                    "model_info": {"mode": "image_generation", **TIERED},
+                }
+            ]
+        )
+        resp = asyncio.run(router.aimage_generation(model="doubao-seedream-5-pro", prompt="p"))
+        assert resp.size == "1872x1248"
+        assert resp._hidden_params.get("response_cost") == pytest.approx(LO)  # low tier, first input image free
+    finally:
+        srv.shutdown()
+
+
+@pytest.mark.parametrize("out_tokens,expected", [(9126, LO), (16224, HI)])  # measured: Ark 1.5K -> 9126, 2K -> 16224
+def test_pixel_tiers_from_ark_output_tokens(out_tokens, expected):
+    r = _resp(usage={"input_images": 0, "generated_images": 1, "output_tokens": out_tokens, "total_tokens": out_tokens}, n=1)
+    obj = SimpleNamespace(litellm_params={"metadata": {"model_info": TIERED}}, model_call_details={"optional_params": {"size": "2K"}})
+    assert _deployment_per_image_cost(r, litellm_logging_obj=obj) == pytest.approx(expected)

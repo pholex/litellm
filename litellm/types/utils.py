@@ -2324,6 +2324,11 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
         self.quality = kwargs.get("quality", None)
         self.output_format = kwargs.get("output_format", None)
         self.size = kwargs.get("size", None)
+        if self.size is None:  # Volcengine Ark returns the size per image (data[].size), not at the top level
+            _first = data[0] if data else None
+            _item_size = _first.get("size") if isinstance(_first, dict) else getattr(_first, "size", None)
+            if isinstance(_item_size, str):
+                self.size = _item_size
         # gpt-image returns the effective background; Codex image_gen reads it to track transparency.
         self.background = kwargs.get("background", None)
         self._hidden_params = hidden_params or {}

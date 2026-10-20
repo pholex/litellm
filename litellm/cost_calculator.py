@@ -825,10 +825,55 @@ def _deployment_per_image_cost(
     if generated is None:
         generated = len(data)
     input_images = _usage_int("input_images") or 0
+    # e.g. Seedream 5.0 pro: "输入图（首张免费）"
+    input_images = max(0, input_images - int(model_info.get("free_input_images") or 0))
 
     output_cost = float(model_info["output_cost_per_image"])
+    # Optional pixel tiers, e.g. Seedream 5.0 pro ¥0.3 for <= 2.61 MP, ¥0.6 above:
+    #   output_cost_per_image_tiers: [{max_pixels: 2610000, output_cost_per_image: 0.0448}]
+    # Tiers apply when the output size is known (response size, request WxH size, or Ark's
+    # output_tokens = pixels / 256);
+    # otherwise output_cost_per_image is used, so set that to the highest tier.
+    tiers = model_info.get("output_cost_per_image_tiers") or []
+    pixels = _image_pixels(completion_response, litellm_logging_obj)
+    if pixels is None and generated:
+        # Ark bills output_tokens = width * height / 256 per generated image.
+        out_tokens = _usage_int("output_tokens")
+        if out_tokens:
+            pixels = out_tokens * 256 // generated
+    if pixels is not None and isinstance(tiers, list):
+        for tier in sorted(
+            (t for t in tiers if isinstance(t, dict) and t.get("max_pixels") is not None),
+            key=lambda t: float(t["max_pixels"]),
+        ):
+            if pixels <= float(tier["max_pixels"]):
+                output_cost = float(tier["output_cost_per_image"])
+                break
     input_cost = float(model_info.get("input_cost_per_image") or 0.0)
     return generated * output_cost + input_images * input_cost
+
+
+def _parse_wxh(value: Any) -> Optional[int]:
+    if not isinstance(value, str):
+        return None
+    parts = value.lower().split("x")
+    if len(parts) != 2 or not all(p.strip().isdigit() for p in parts):
+        return None
+    return int(parts[0]) * int(parts[1])
+
+
+def _image_pixels(completion_response: Any, litellm_logging_obj: Optional[Any]) -> Optional[int]:
+    """Output pixel count: the response's size (Ark returns it per image), else the request's WxH size."""
+    pixels = _parse_wxh(getattr(completion_response, "size", None))
+    if pixels is not None:
+        return pixels
+    if litellm_logging_obj is not None:
+        details = getattr(litellm_logging_obj, "model_call_details", None) or {}
+        for src in (details.get("optional_params") or {}, details):
+            pixels = _parse_wxh(src.get("size") if isinstance(src, dict) else None)
+            if pixels is not None:
+                return pixels
+    return None
 
 
 def _select_model_name_for_cost_calc(
