@@ -347,6 +347,15 @@ def test_a_final_render_with_other_inputs_is_rejected_unless_drop_params_which_k
     assert _create_body(params, drop_params=True)["content"] == [DRAFT_ITEM]
 
 
+def test_a_final_render_sends_ark_the_drafts_own_id_when_the_caller_passes_litellms_encoded_one():
+    encoded = encode_video_id_with_provider(DRAFT_ID, "volcengine", "seedance", None)
+    assert encoded != DRAFT_ID
+
+    body = _create_body({"content": [{"type": "draft_task", "draft_task": {"id": encoded}}]})
+
+    assert body["content"] == [DRAFT_ITEM]
+
+
 def test_a_draft_item_without_an_id_is_rejected_unless_drop_params_which_drops_it():
     with pytest.raises(UnsupportedParamsError, match="draft_task.id"):
         _ = _create_body({"content": [{"type": "draft_task"}], "duration": 4})

@@ -416,9 +416,17 @@ def _is_input_video(item: _ContentItem) -> bool:
 
 
 def _draft_id(item: _ContentItem) -> str | None:
+    """The caller holds the draft's id as litellm returned it, with the provider and model encoded in, and Ark
+    knows only its own task id."""
     if item.type != _DRAFT_TASK_TYPE:
         return None
-    return item.draft_task.id if item.draft_task is not None and item.draft_task.id else None
+    if item.draft_task is None or not item.draft_task.id:
+        return None
+    return extract_original_video_id(item.draft_task.id) or None
+
+
+def _ark_draft_item(item: Mapping[str, object], draft_id: str) -> Mapping[str, object]:
+    return MappingProxyType({**item, "draft_task": {"id": draft_id}})
 
 
 def _draft_task_id(content: object) -> str | None:
@@ -451,13 +459,13 @@ def _supplied_items(supplied: object, model: str, drop_params: bool) -> tuple[Ma
     if any(entry.type == _DRAFT_TASK_TYPE and _draft_id(entry) is None for entry in entries) and not drop_params:
         raise _droppable(model, "a draft_task item needs the draft's task id in draft_task.id")
     kept: Final = tuple(
-        MappingProxyType(item)
-        for item, entry in zip(items, entries)
+        _ark_draft_item(item, draft_id) if draft_id is not None else MappingProxyType(item)
+        for item, entry, draft_id in ((item, entry, _draft_id(entry)) for item, entry in zip(items, entries))
         if entry.type != "text"
         and not _is_input_video(entry)
-        and not (entry.type == _DRAFT_TASK_TYPE and _draft_id(entry) is None)
+        and not (entry.type == _DRAFT_TASK_TYPE and draft_id is None)
     )
-    draft: Final = next((item for item, entry in zip(items, entries) if _draft_id(entry) is not None), None)
+    draft: Final = next((item for item in kept if _draft_task_id((item,)) is not None), None)
     if draft is None or len(kept) == 1:
         return kept
     if not drop_params:
@@ -466,7 +474,7 @@ def _supplied_items(supplied: object, model: str, drop_params: bool) -> tuple[Ma
             "a draft_task item must be the only content item: Ark reuses the draft's prompt and inputs for the "
             "final video and rejects any sent again",
         )
-    return (MappingProxyType(draft),)
+    return (draft,)
 
 
 def _reference_items(params: Mapping[str, object], model: str, drop_params: bool) -> tuple[Mapping[str, object], ...]:
