@@ -828,6 +828,7 @@ def _deployment_per_image_cost(
     # e.g. Seedream 5.0 pro: "输入图（首张免费）"
     input_images = max(0, input_images - int(model_info.get("free_input_images") or 0))
 
+    input_cost = float(model_info.get("input_cost_per_image") or 0.0)
     output_cost = float(model_info["output_cost_per_image"])
     # Optional pixel tiers, e.g. Seedream 5.0 pro ¥0.3 for <= 2.61 MP, ¥0.6 above:
     #   output_cost_per_image_tiers: [{max_pixels: 2610000, output_cost_per_image: 0.0448}]
@@ -835,22 +836,58 @@ def _deployment_per_image_cost(
     # output_tokens = pixels / 256);
     # otherwise output_cost_per_image is used, so set that to the highest tier.
     tiers = model_info.get("output_cost_per_image_tiers") or []
+
+    # Layer decomposition (Seedream `layer_decomposition: true`): the response carries one item per
+    # output (base z_index 0 + layers), each with its own size in provider_specific_fields. Ark bills
+    # this scenario per output at its own, lower rate ("图层拆分场景", ¥0.15 / ¥0.30 by pixel tier), and
+    # each output by its own pixel tier; so price every item individually with
+    #   output_cost_per_layer (top tier) / output_cost_per_layer_tiers: [{max_pixels, output_cost_per_layer}]
+    # falling back to the image price when no layer price is configured.
+    layer_items = _layer_items(data)
+    if layer_items:
+        layer_flat = model_info.get("output_cost_per_layer")
+        layer_tiers = model_info.get("output_cost_per_layer_tiers")
+        if layer_flat is None:
+            layer_flat, layer_tiers = output_cost, [
+                {"max_pixels": t.get("max_pixels"), "output_cost_per_layer": t.get("output_cost_per_image")}
+                for t in tiers if isinstance(t, dict)]
+        total = 0.0
+        for item_pixels in layer_items:
+            total += _tier_price(item_pixels, layer_tiers, float(layer_flat), "output_cost_per_layer")
+        return total + input_images * input_cost
+
     pixels = _image_pixels(completion_response, litellm_logging_obj)
     if pixels is None and generated:
         # Ark bills output_tokens = width * height / 256 per generated image.
         out_tokens = _usage_int("output_tokens")
         if out_tokens:
             pixels = out_tokens * 256 // generated
-    if pixels is not None and isinstance(tiers, list):
-        for tier in sorted(
-            (t for t in tiers if isinstance(t, dict) and t.get("max_pixels") is not None),
-            key=lambda t: float(t["max_pixels"]),
-        ):
-            if pixels <= float(tier["max_pixels"]):
-                output_cost = float(tier["output_cost_per_image"])
-                break
-    input_cost = float(model_info.get("input_cost_per_image") or 0.0)
+    output_cost = _tier_price(pixels, tiers, output_cost, "output_cost_per_image")
     return generated * output_cost + input_images * input_cost
+
+
+def _tier_price(pixels: Optional[int], tiers: Any, flat: float, key: str) -> float:
+    """Price of the smallest tier whose max_pixels covers `pixels`; `flat` when unknown or above every tier."""
+    if pixels is None or not isinstance(tiers, list):
+        return flat
+    for tier in sorted(
+        (t for t in tiers if isinstance(t, dict) and t.get("max_pixels") is not None and t.get(key) is not None),
+        key=lambda t: float(t["max_pixels"]),
+    ):
+        if pixels <= float(tier["max_pixels"]):
+            return float(tier[key])
+    return flat
+
+
+def _layer_items(data: Any) -> List[Optional[int]]:
+    """For a layer-decomposition response: one pixel count (or None) per output item; [] otherwise."""
+    out: List[Optional[int]] = []
+    for item in data or []:
+        psf = item.get("provider_specific_fields") if isinstance(item, dict) else getattr(item, "provider_specific_fields", None)
+        if not isinstance(psf, dict) or psf.get("z_index") is None:
+            return []
+        out.append(_parse_wxh(psf.get("size")))
+    return out
 
 
 def _parse_wxh(value: Any) -> Optional[int]:

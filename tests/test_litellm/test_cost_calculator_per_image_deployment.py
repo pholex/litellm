@@ -168,3 +168,48 @@ def test_pixel_tiers_from_ark_output_tokens(out_tokens, expected):
     r = _resp(usage={"input_images": 0, "generated_images": 1, "output_tokens": out_tokens, "total_tokens": out_tokens}, n=1)
     obj = SimpleNamespace(litellm_params={"metadata": {"model_info": TIERED}}, model_call_details={"optional_params": {"size": "2K"}})
     assert _deployment_per_image_cost(r, litellm_logging_obj=obj) == pytest.approx(expected)
+
+
+# ---- layer decomposition: every output billed by its own pixels at the layer rate ----
+LAYER_HI = 0.04477611940  # ¥0.30 / 6.7 (> 2.61 MP)
+LAYER_LO = 0.02238805970  # ¥0.15 / 6.7 (<= 2.61 MP)
+LAYERED = {**TIERED, "output_cost_per_layer": LAYER_HI,
+           "output_cost_per_layer_tiers": [{"max_pixels": 2610000, "output_cost_per_layer": LAYER_LO}]}
+
+
+def _layer_resp(sizes, input_images=1):
+    items = [{"b64_json": "x", "size": s, "output_format": "png", "z_index": i} for i, s in enumerate(sizes)]
+    r = ImageResponse(data=items)
+    r.usage = {"input_images": input_images, "generated_images": len(sizes), "output_tokens": 1, "total_tokens": 1}
+    return r
+
+
+def test_layers_billed_per_item_at_layer_rate():
+    r = _layer_resp(["2000x2000", "1473x383", "889x570"])  # base above the tier, two small layers
+    assert r.data[1].provider_specific_fields["z_index"] == 1
+    cost = _deployment_per_image_cost(r, litellm_logging_obj=_logging_obj(LAYERED))
+    assert cost == pytest.approx(LAYER_HI + 2 * LAYER_LO)
+
+
+def test_layers_input_images_still_charged_after_free_one():
+    r = _layer_resp(["1024x1024", "300x200"], input_images=3)
+    cost = _deployment_per_image_cost(r, litellm_logging_obj=_logging_obj(LAYERED))
+    assert cost == pytest.approx(2 * LAYER_LO + 2 * IN)
+
+
+def test_layers_fall_back_to_image_tiers_without_layer_price():
+    r = _layer_resp(["2000x2000", "1473x383"])
+    cost = _deployment_per_image_cost(r, litellm_logging_obj=_logging_obj(TIERED))
+    assert cost == pytest.approx(HI + LO)
+
+
+def test_layer_item_without_size_uses_top_layer_price():
+    r = ImageResponse(data=[{"b64_json": "x", "z_index": 0, "size": "1024x1024"}, {"b64_json": "y", "z_index": 1}])
+    cost = _deployment_per_image_cost(r, litellm_logging_obj=_logging_obj(LAYERED))
+    assert cost == pytest.approx(LAYER_LO + LAYER_HI)
+
+
+def test_plain_response_is_not_treated_as_layers():
+    r = _resp(n=2)
+    r.size = "1024x1024"
+    assert _deployment_per_image_cost(r, litellm_logging_obj=_logging_obj(LAYERED)) == pytest.approx(2 * LO)
