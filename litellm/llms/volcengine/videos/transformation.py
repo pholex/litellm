@@ -80,9 +80,14 @@ class _TaskList(BaseModel, frozen=True):
     total: int | None = None
 
 
+class _DraftTaskRef(BaseModel, frozen=True):
+    id: str | None = None
+
+
 class _ContentItem(BaseModel, frozen=True):
     type: str | None = None
     role: str | None = None
+    draft_task: _DraftTaskRef | None = None
 
 
 class _KnownFields(BaseModel, frozen=True):
@@ -92,6 +97,7 @@ class _KnownFields(BaseModel, frozen=True):
     camera_fixed: StrictBool | None = None
     watermark: StrictBool | None = None
     generate_audio: StrictBool | None = None
+    draft: StrictBool | None = None
 
 
 VOLCENGINE_VIDEO_TASKS_PATH: Final = "/api/v3/contents/generations/tasks"
@@ -140,6 +146,7 @@ _CREATE_PASSTHROUGH_KEYS: Final = (
     "safety_identifier",
     "tools",
     "omni_reference_task_type",
+    "draft",
 )
 
 _REQUEST_METADATA: Final = frozenset({"model", "prompt", "user", "extra_headers", "extra_query", "extra_body"})
@@ -170,6 +177,16 @@ _VIDEO_INPUT_UNSUPPORTED: Final = (
 )
 _INPUT_VIDEO_ROLE: Final = "reference_video"
 _INPUT_VIDEO_TYPE: Final = "video_url"
+
+# Seedance 2.5 draft mode: ``draft: true`` renders a 480p sample, and a later create whose only content item is
+# ``{"type": "draft_task", "draft_task": {"id": ...}}`` renders that same sample at 1080p, within 7 days. Ark
+# reuses the draft's prompt, inputs and these fields on the final create and rejects them even when they repeat the
+# draft's values, so the final video's length is only known from the draft task itself.
+_DRAFT_TASK_TYPE: Final = "draft_task"
+_DRAFT_RESOLUTION: Final = "480p"
+_FINAL_RESOLUTION: Final = "1080p"
+_INHERITED_FROM_DRAFT: Final = ("duration", "ratio", "seed", "generate_audio", "omni_reference_task_type")
+_DRAFT_LOOKUP_TIMEOUT_S: Final = 15.0
 
 _RATIO_SET: Final = ("16:9", "9:16", "4:3", "3:4", "1:1", "21:9")
 _RESOLUTION_SHORTEST_SIDE: Final = MappingProxyType({"480p": 480, "720p": 720, "1080p": 1080, "4k": 2160})
@@ -398,6 +415,23 @@ def _is_input_video(item: _ContentItem) -> bool:
     return item.type == _INPUT_VIDEO_TYPE or item.role == _INPUT_VIDEO_ROLE
 
 
+def _draft_id(item: _ContentItem) -> str | None:
+    if item.type != _DRAFT_TASK_TYPE:
+        return None
+    return item.draft_task.id if item.draft_task is not None and item.draft_task.id else None
+
+
+def _draft_task_id(content: object) -> str | None:
+    """The draft a sent body renders at full resolution, read back off the body the create transform built."""
+    try:
+        entries: Final = tuple(
+            _ContentItem.model_validate(item) for item in _CONTENT_ITEMS_ADAPTER.validate_python(content)
+        )
+    except ValidationError:
+        return None
+    return next((draft for draft in map(_draft_id, entries) if draft is not None), None)
+
+
 def _supplied_items(supplied: object, model: str, drop_params: bool) -> tuple[Mapping[str, object], ...]:
     try:
         items: Final = _CONTENT_ITEMS_ADAPTER.validate_python(supplied)
@@ -414,8 +448,25 @@ def _supplied_items(supplied: object, model: str, drop_params: bool) -> tuple[Ma
         )
     if any(_is_input_video(entry) for entry in entries) and not drop_params:
         raise _droppable(model, _VIDEO_INPUT_UNSUPPORTED.format(operation="Video input (a reference_video item)"))
-    kept: Final = (item for item, entry in zip(items, entries) if entry.type != "text" and not _is_input_video(entry))
-    return tuple(MappingProxyType(item) for item in kept)
+    if any(entry.type == _DRAFT_TASK_TYPE and _draft_id(entry) is None for entry in entries) and not drop_params:
+        raise _droppable(model, "a draft_task item needs the draft's task id in draft_task.id")
+    kept: Final = tuple(
+        MappingProxyType(item)
+        for item, entry in zip(items, entries)
+        if entry.type != "text"
+        and not _is_input_video(entry)
+        and not (entry.type == _DRAFT_TASK_TYPE and _draft_id(entry) is None)
+    )
+    draft: Final = next((item for item, entry in zip(items, entries) if _draft_id(entry) is not None), None)
+    if draft is None or len(kept) == 1:
+        return kept
+    if not drop_params:
+        raise _droppable(
+            model,
+            "a draft_task item must be the only content item: Ark reuses the draft's prompt and inputs for the "
+            "final video and rejects any sent again",
+        )
+    return (MappingProxyType(draft),)
 
 
 def _reference_items(params: Mapping[str, object], model: str, drop_params: bool) -> tuple[Mapping[str, object], ...]:
@@ -439,8 +490,16 @@ def _reference_items(params: Mapping[str, object], model: str, drop_params: bool
 def _sent_content(
     prompt: str, params: Mapping[str, object], model: str, drop_params: bool
 ) -> tuple[Mapping[str, object], ...]:
-    """The prompt always leads, as it is the only text the input guardrails scan."""
-    return (MappingProxyType({"type": "text", "text": prompt}), *_reference_items(params, model, drop_params))
+    """The prompt always leads, as it is the only text the input guardrails scan. A final render of a draft sends
+    none, since Ark reuses the draft's prompt, which those guardrails scanned when the draft was created."""
+    items: Final = _reference_items(params, model, drop_params)
+    if any(_draft_id(_ContentItem.model_validate(item)) is not None for item in items):
+        if params.get("input_reference") is not None and not drop_params:
+            raise _droppable(
+                model, "input_reference cannot be sent with a draft_task item, the draft's inputs are reused"
+            )
+        return items
+    return (MappingProxyType({"type": "text", "text": prompt}), *items)
 
 
 def _seconds_label(seconds: object) -> str | None:
@@ -464,6 +523,34 @@ def _requested_usage(request_data: Mapping[str, object]) -> Mapping[str, object]
             if value is not None
         }
     )
+
+
+def _draft_task(draft_id: str, raw_response: httpx.Response, created_id: str) -> _Task:
+    """A final render carries no length of its own, so the draft task it renders is read on the account and host
+    that just created it. The final task already exists at Ark by now, so a failure is a 400 that names it: a status
+    the proxy would retry or cool the deployment on would create the same video again."""
+    create_request: Final = raw_response.request
+    url: Final = f"{create_request.url}/{encode_url_path_segment(draft_id, field_name='draft_task.id')}"
+    authorization: Final[str | None] = create_request.headers.get("authorization")  # pyright: ignore[reportAny]  # httpx Headers.get is untyped
+    problem: Final = (
+        f"Ark created video task {created_id} from draft {draft_id}, but the draft task could not be read to bill "
+        f"the final video: {{detail}}. The task is running at Ark; poll it by its id."
+    )
+    try:
+        lookup: Final = _get_httpx_client().get(  # pyright: ignore[reportUnknownMemberType]  # HTTPHandler.get stub leaves params/headers untyped
+            url, headers={"Authorization": authorization} if authorization else None, timeout=_DRAFT_LOOKUP_TIMEOUT_S
+        )
+    except httpx.HTTPError as e:
+        raise _video_error(raw_response, 400, problem.format(detail=f"{type(e).__name__}: {e}")) from e
+    if lookup.status_code >= 400:
+        raise _video_error(raw_response, 400, problem.format(detail=f"HTTP {lookup.status_code} {lookup.text[:200]}"))
+    try:
+        task: Final = _TASK_ADAPTER.validate_python(lookup.json())
+    except (json.JSONDecodeError, ValidationError) as e:
+        raise _video_error(raw_response, 400, problem.format(detail=f"unexpected task body: {e}")) from e
+    if task.duration is None or task.duration <= 0:
+        raise _video_error(raw_response, 400, problem.format(detail="the draft task reports no duration"))
+    return task
 
 
 def _task_usage(task: _Task) -> Mapping[str, object]:
@@ -636,6 +723,8 @@ class VolcEngineVideoConfig(BaseVideoConfig):
         content: Final = _sent_content(prompt, params, model, drop_params)
         if params.get("frames") is not None and not drop_params:
             raise _droppable(model, "frames is not supported through litellm, pass seconds instead")
+        if _draft_task_id(content) is not None:
+            return self._final_render_request(model, content, params, litellm_params, drop_params, api_base)
         requested_duration: Final = params.get("duration")
         parsed_duration: Final = None if requested_duration is None else _duration_param(requested_duration)
         if requested_duration is not None and (parsed_duration is None or parsed_duration <= 0) and not drop_params:
@@ -663,8 +752,16 @@ class VolcEngineVideoConfig(BaseVideoConfig):
         if malformed and not drop_params:
             raise _droppable(model, "; ".join(f"invalid {field}: {message}" for field, message in malformed))
         resolution: Final = requested_fields.get("resolution")
+        draft: Final = requested_fields.get("draft") is True
+        off_draft_tier: Final = (
+            draft and isinstance(resolution, str) and resolution.strip().lower() != _DRAFT_RESOLUTION
+        )
+        if off_draft_tier and not drop_params:
+            raise _droppable(
+                model, f"a draft renders at {_DRAFT_RESOLUTION} only, not {resolution!r}; leave resolution out"
+            )
         priced_tiers: Final = _priced_tiers(_pricing_model(model, litellm_params))
-        drops_resolution: Final = (
+        drops_resolution: Final = off_draft_tier or (
             priced_tiers is not None and isinstance(resolution, str) and resolution.strip().lower() not in priced_tiers
         )
         if drops_resolution and not drop_params:
@@ -675,8 +772,12 @@ class VolcEngineVideoConfig(BaseVideoConfig):
         kept_fields: Final = MappingProxyType(
             {key: value for key, value in requested_fields.items() if key not in dropped}
         )
+        # A draft has one tier, so it is always named; otherwise the default is sent only when it is priced, so the
+        # bill matches what Ark renders.
         default_tier: Final = (
-            MappingProxyType({"resolution": VOLCENGINE_VIDEO_DEFAULT_RESOLUTION})
+            MappingProxyType({"resolution": _DRAFT_RESOLUTION})
+            if draft and "resolution" not in kept_fields
+            else MappingProxyType({"resolution": VOLCENGINE_VIDEO_DEFAULT_RESOLUTION})
             if "resolution" not in kept_fields
             and priced_tiers is not None
             and VOLCENGINE_VIDEO_DEFAULT_RESOLUTION in priced_tiers
@@ -689,6 +790,68 @@ class VolcEngineVideoConfig(BaseVideoConfig):
             **default_tier,
             **kept_fields,
             "duration": duration,
+        }
+        return request_data, (), f"{api_base}{VOLCENGINE_VIDEO_TASKS_PATH}"
+
+    @staticmethod
+    def _final_render_request(
+        model: str,
+        content: tuple[Mapping[str, object], ...],
+        params: Mapping[str, object],
+        litellm_params: GenericLiteLLMParams,
+        drop_params: bool,
+        api_base: str,
+    ) -> tuple[dict[str, object], RequestFiles, str]:  # mutable-ok: BaseVideoConfig contract
+        """A ``draft_task`` item asks Ark to render a finished draft at 1080p. Ark takes the prompt, inputs, length,
+        ratio and the other fields it lists from the draft and rejects them when sent again, so the body carries
+        only the draft reference, the one tier a final video has, and the fields Ark lets a final render set."""
+        inherited: Final = tuple(
+            sorted(
+                key
+                for key in (*_INHERITED_FROM_DRAFT, "draft")
+                if params.get(key) is not None and not (key == "draft" and params.get(key) is False)
+            )
+        )
+        if inherited and not drop_params:
+            raise _droppable(
+                model,
+                f"Ark reuses {', '.join(inherited)} from the draft task on a draft_task create and rejects them even "
+                "unchanged; leave them out",
+            )
+        unknown_fields: Final = tuple(
+            sorted(key for key, value in params.items() if value is not None and key not in _CREATE_HANDLED_KEYS)
+        )
+        if unknown_fields and not drop_params:
+            raise _droppable(model, f"litellm does not send {', '.join(unknown_fields)} to Ark video generation")
+        requested_fields: Final = MappingProxyType(
+            {
+                key: params[key]
+                for key in _CREATE_PASSTHROUGH_KEYS
+                if params.get(key) is not None and key not in inherited and key != "resolution"
+            }
+        )
+        malformed: Final = _malformed_fields(requested_fields)
+        if malformed and not drop_params:
+            raise _droppable(model, "; ".join(f"invalid {field}: {message}" for field, message in malformed))
+        resolution: Final = params.get("resolution")
+        off_tier: Final = resolution is not None and (
+            not isinstance(resolution, str) or resolution.strip().lower() != _FINAL_RESOLUTION
+        )
+        if off_tier and not drop_params:
+            raise _droppable(
+                model, f"a final video from a draft renders at {_FINAL_RESOLUTION} only, not {resolution!r}"
+            )
+        priced_tiers: Final = _priced_tiers(_pricing_model(model, litellm_params))
+        if priced_tiers is not None and _FINAL_RESOLUTION not in priced_tiers:
+            raise _unsupported(
+                model, f"a final video from a draft renders at {_FINAL_RESOLUTION}, which {model} has no price for"
+            )
+        dropped: Final = frozenset(field for field, _ in malformed)
+        request_data: Final[dict[str, object]] = {  # mutable-ok: request body dict, JSON-serialized by the handler
+            "model": model,
+            "content": [dict(item) for item in content],
+            "resolution": _FINAL_RESOLUTION,
+            **{key: value for key, value in requested_fields.items() if key not in dropped},
         }
         return request_data, (), f"{api_base}{VOLCENGINE_VIDEO_TASKS_PATH}"
 
@@ -705,11 +868,17 @@ class VolcEngineVideoConfig(BaseVideoConfig):
             message: Final = task.error.message if task.error is not None and task.error.message else "no task id"
             raise _video_error(raw_response, 400, f"Volcengine did not return a video task id: {message}")
         requested: Final = request_data or _EMPTY_PARAMS
-        usage: Final = _requested_usage(requested)
+        draft_id: Final = _draft_task_id(requested.get("content"))
+        draft: Final = _draft_task(draft_id, raw_response, task.id) if draft_id is not None else None
+        usage: Final = (
+            MappingProxyType({"duration_seconds": float(draft.duration or 0), "video_resolution": _FINAL_RESOLUTION})
+            if draft is not None
+            else _requested_usage(requested)
+        )
         seconds: Final = usage.get("duration_seconds")
         requested_model, served_model = routed_video_models(logging_obj) or (model, None)
         resolution: Final = requested.get("resolution")
-        ratio: Final = requested.get("ratio")
+        ratio: Final = draft.ratio if draft is not None else requested.get("ratio")
         return VideoObject(
             id=encode_video_id_with_provider(task.id, custom_llm_provider, requested_model, served_model)
             if custom_llm_provider

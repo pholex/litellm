@@ -230,7 +230,7 @@ def test_an_endpoint_id_priced_through_base_model_gets_the_base_models_default_t
     assert (body["model"], body["resolution"]) == ("ep-20261015-abc", "720p")
 
 
-@pytest.mark.parametrize("field", ["return_last_frame", "draft", "frame_count"])
+@pytest.mark.parametrize("field", ["return_last_frame", "frame_count"])
 def test_a_field_litellm_does_not_send_to_ark_is_rejected(field: str):
     with pytest.raises(UnsupportedParamsError, match=f"does not send {field} to Ark"):
         _ = _create_body({"duration": 4, field: True})
@@ -249,6 +249,173 @@ def test_a_duration_ark_would_pick_or_that_is_not_whole_seconds_is_rejected(dura
         _ = _create_body({"duration": duration})
 
     assert _create_body({"duration": duration}, drop_params=True)["duration"] == 4
+
+
+DRAFT_ID: Final = "cgt-2026-draft"
+DRAFT_ITEM: Final = {"type": "draft_task", "draft_task": {"id": DRAFT_ID}}
+DRAFT_GET_URL: Final = f"{TASKS_URL}/{DRAFT_ID}"
+
+
+def test_a_draft_renders_at_480p_whether_or_not_the_tier_is_named():
+    assert _create_body({"draft": True, "duration": 5}) == {
+        "model": SEEDANCE_2_5,
+        "content": [{"type": "text", "text": "a cat on a roof"}],
+        "resolution": "480p",
+        "draft": True,
+        "duration": 5,
+    }
+    assert _create_body({"draft": True, "resolution": "480p", "duration": 5})["resolution"] == "480p"
+
+
+def test_a_draft_at_another_tier_is_rejected_unless_drop_params_which_sends_the_draft_tier():
+    with pytest.raises(UnsupportedParamsError, match="a draft renders at 480p only, not '720p'"):
+        _ = _create_body({"draft": True, "resolution": "720p", "duration": 5})
+
+    body = _create_body({"draft": True, "resolution": "720p", "duration": 5}, drop_params=True)
+
+    assert (body["resolution"], body["draft"]) == ("480p", True)
+
+
+def test_a_draft_names_its_tier_even_for_a_model_without_prices():
+    body = _create_body({"draft": True, "duration": 5}, model="doubao-seedance-unlisted")
+
+    assert body["resolution"] == "480p"
+
+
+def test_a_draft_flag_that_is_off_is_sent_and_leaves_the_tier_alone():
+    body = _create_body({"draft": False, "duration": 5})
+
+    assert (body["draft"], body["resolution"]) == (False, "720p")
+
+
+def test_a_final_render_sends_only_the_draft_reference_at_1080p_and_no_prompt_or_length():
+    assert _create_body({"content": [DRAFT_ITEM], "watermark": False, "output_format": "mov"}) == {
+        "model": SEEDANCE_2_5,
+        "content": [DRAFT_ITEM],
+        "resolution": "1080p",
+        "watermark": False,
+        "output_format": "mov",
+    }
+    assert _create_body({"content": [DRAFT_ITEM], "resolution": "1080p", "draft": False})["draft"] is False
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [{"duration": 5}, {"ratio": "16:9"}, {"seed": 7}, {"generate_audio": True}, {"omni_reference_task_type": "auto"}],
+    ids=["duration", "ratio", "seed", "generate_audio", "omni_reference_task_type"],
+)
+def test_a_final_render_rejects_the_fields_ark_reuses_from_the_draft_unless_drop_params(fields: dict[str, object]):
+    (field,) = fields
+    with pytest.raises(UnsupportedParamsError, match=f"Ark reuses {field} from the draft task"):
+        _ = _create_body({"content": [DRAFT_ITEM], **fields})
+
+    body = _create_body({"content": [DRAFT_ITEM], **fields}, drop_params=True)
+
+    assert field not in body and body["resolution"] == "1080p"
+
+
+def test_a_final_render_that_is_also_flagged_as_a_draft_is_rejected_unless_drop_params():
+    with pytest.raises(UnsupportedParamsError, match="Ark reuses draft from the draft task"):
+        _ = _create_body({"content": [DRAFT_ITEM], "draft": True})
+
+    assert "draft" not in _create_body({"content": [DRAFT_ITEM], "draft": True}, drop_params=True)
+
+
+@pytest.mark.parametrize("resolution", ["720p", "480p", 1080])
+def test_a_final_render_at_anything_but_1080p_is_rejected_unless_drop_params(resolution: object):
+    with pytest.raises(UnsupportedParamsError, match="renders at 1080p only"):
+        _ = _create_body({"content": [DRAFT_ITEM], "resolution": resolution})
+
+    assert _create_body({"content": [DRAFT_ITEM], "resolution": resolution}, drop_params=True)["resolution"] == "1080p"
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"content": [DRAFT_ITEM, IMAGE_ITEM]},
+        {"content": [IMAGE_ITEM, DRAFT_ITEM]},
+        {"content": [DRAFT_ITEM], "input_reference": "https://x/first.png"},
+    ],
+    ids=["draft-then-image", "image-then-draft", "input_reference"],
+)
+def test_a_final_render_with_other_inputs_is_rejected_unless_drop_params_which_keeps_only_the_draft(
+    params: dict[str, object],
+):
+    with pytest.raises(UnsupportedParamsError, match="draft"):
+        _ = _create_body(params)
+
+    assert _create_body(params, drop_params=True)["content"] == [DRAFT_ITEM]
+
+
+def test_a_draft_item_without_an_id_is_rejected_unless_drop_params_which_drops_it():
+    with pytest.raises(UnsupportedParamsError, match="draft_task.id"):
+        _ = _create_body({"content": [{"type": "draft_task"}], "duration": 4})
+
+    body = _create_body(
+        {"content": [{"type": "draft_task", "draft_task": {}}, IMAGE_ITEM], "duration": 4}, drop_params=True
+    )
+
+    assert body["content"] == [{"type": "text", "text": "a cat on a roof"}, IMAGE_ITEM]
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_a_final_render_of_a_model_with_no_1080p_price_is_refused_whatever_drop_params_says():
+    with pytest.raises(UnsupportedParamsError, match="has no price for"):
+        _ = _create_body({"content": [DRAFT_ITEM]}, model=SEEDANCE_2_0_FAST, drop_params=True)
+
+
+def _create_from_draft(request_data: dict[str, object], draft_payload: object, status_code: int = 200):
+    with respx.mock(assert_all_called=True) as mocked:
+        draft_get = mocked.get(DRAFT_GET_URL).mock(return_value=httpx.Response(status_code, json=draft_payload))
+        create_request = httpx.Request("POST", TASKS_URL, headers={"Authorization": "Bearer key-a"})
+        video = VolcEngineVideoConfig().transform_video_create_response(
+            model=SEEDANCE_2_5,
+            raw_response=httpx.Response(200, json={"id": TASK_ID}, request=create_request),
+            logging_obj=None,  # pyright: ignore[reportArgumentType]  # the transform only reads litellm_params off it
+            custom_llm_provider="volcengine",
+            request_data=request_data,
+        )
+        (lookup,) = draft_get.calls
+    return video, lookup.request
+
+
+def test_a_final_render_bills_the_drafts_length_at_1080p_read_from_the_draft_task_on_the_creating_account():
+    video, lookup = _create_from_draft(
+        {"model": SEEDANCE_2_5, "content": [DRAFT_ITEM], "resolution": "1080p"},
+        _task(id=DRAFT_ID, resolution="480p", ratio="16:9", duration=5),
+    )
+
+    assert lookup.headers["authorization"] == "Bearer key-a"
+    assert video.model_dump(include={"status", "seconds", "size", "usage", "model"}) == {
+        "status": "queued",
+        "seconds": "5",
+        "size": "1920x1080",
+        "usage": {"duration_seconds": 5.0, "video_resolution": "1080p"},
+        "model": SEEDANCE_2_5,
+    }
+    assert decode_video_id_with_provider(video.id)["video_id"] == TASK_ID
+
+
+@pytest.mark.parametrize(
+    "draft_payload,status_code,detail",
+    [
+        ({"error": {"code": "NotFound", "message": "no such task"}}, 404, "HTTP 404"),
+        (_task(id=DRAFT_ID, resolution="480p", ratio="16:9"), 200, "reports no duration"),
+        ("not a task", 200, "unexpected task body"),
+    ],
+    ids=["lookup-404", "no-duration", "not-json-task"],
+)
+def test_a_final_render_whose_draft_cannot_be_read_is_a_400_naming_the_created_task_so_it_is_not_retried(
+    draft_payload: object, status_code: int, detail: str
+):
+    with pytest.raises(
+        VolcEngineVideoError, match=f"created video task {TASK_ID} from draft {DRAFT_ID}.*{detail}"
+    ) as raised:
+        _ = _create_from_draft(
+            {"model": SEEDANCE_2_5, "content": [DRAFT_ITEM], "resolution": "1080p"}, draft_payload, status_code
+        )
+
+    assert raised.value.status_code == 400
 
 
 def test_frames_is_rejected_because_it_bypasses_the_billed_duration():
