@@ -2217,8 +2217,14 @@ class ImageObject(OpenAIImage):
         **kwargs,
     ):
         super().__init__(b64_json=b64_json, url=url, revised_prompt=revised_prompt)  # type: ignore
+        # Keep per-image fields that are not part of the OpenAI spec (e.g. Seedream layer
+        # decomposition returns z_index / bounding_box / name / description per layer) instead
+        # of silently dropping them, so OpenAI-compatible providers' extras reach the caller.
+        extras = {k: v for k, v in kwargs.items() if v is not None}
         if provider_specific_fields:
-            self.provider_specific_fields = provider_specific_fields
+            extras = {**extras, **provider_specific_fields}
+        if extras:
+            self.provider_specific_fields = extras
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -2272,6 +2278,10 @@ from openai.types.images_response import ImagesResponse as OpenAIImageResponse
 class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
     _hidden_params: dict = {}
 
+    # Re-declared with LiteLLM's ImageObject so model_dump() serializes provider_specific_fields
+    # (with the parent's List[Image] annotation pydantic serializes items as plain OpenAI Image
+    # and drops the extra field).
+    data: Optional[List[ImageObject]] = None  # type: ignore
     usage: Optional[ImageUsage] = None  # type: ignore
     """
     Users might use litellm with older python versions, we don't want this to break for them.
