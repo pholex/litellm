@@ -1005,6 +1005,16 @@ def responses(
         # (gpt-6 -> gpt-5.6-sol) the request silently lands on another model.
         # "auto"/"concise"/"detailed" replace the requested value; "drop"
         # removes the key entirely. Only touches requests that carry a summary.
+        # Per-deployment rewrite of reasoning.effort (litellm_params
+        # reasoning_effort_map, e.g. {"none": "low"}). Bedrock-hosted
+        # gpt-6-astra rejects effort "none" (400 "Supported values are: 'low',
+        # 'medium', 'high', 'xhigh', and 'max'") while Codex offers it, so the
+        # request silently landed on the fallback model.
+        _effort_map = kwargs.get("reasoning_effort_map")
+        if isinstance(_effort_map, dict) and isinstance(reasoning, dict) and reasoning.get("effort") in _effort_map:
+            reasoning = {**reasoning, "effort": _effort_map[reasoning["effort"]]}
+            local_vars["reasoning"] = reasoning
+
         _summary_override = kwargs.get("reasoning_summary_override")
         if _summary_override is not None and isinstance(reasoning, dict) and "summary" in reasoning:
             reasoning = dict(reasoning)

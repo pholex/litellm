@@ -3197,6 +3197,7 @@ all_litellm_params = (
         "drop_namespace_tools",
         "bridge_custom_tools_as_functions",
         "inline_image_urls",
+        "reasoning_effort_map",
         "_bridge_custom_tool_names",
         "allowed_tool_types",
         "reasoning_summary_override",

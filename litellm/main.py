@@ -4824,6 +4824,15 @@ def completion(  # type: ignore
     # direct /chat/completions path and the /responses bridge (input_image).
     if kwargs.get("inline_image_urls") and messages:
         messages = inline_image_urls_in_messages(messages)
+    # Per-deployment rewrite of reasoning_effort (litellm_param
+    # reasoning_effort_map, e.g. {"none": "low"}) for upstreams that reject
+    # some effort values (gpt-6-astra: "none"). Same map as the /responses path.
+    _effort_map = kwargs.get("reasoning_effort_map")
+    if isinstance(_effort_map, dict) and reasoning_effort is not None:
+        if isinstance(reasoning_effort, str) and reasoning_effort in _effort_map:
+            reasoning_effort = _effort_map[reasoning_effort]
+        elif isinstance(reasoning_effort, dict) and reasoning_effort.get("effort") in _effort_map:
+            reasoning_effort = {**reasoning_effort, "effort": _effort_map[reasoning_effort["effort"]]}
     # allowed_tool_types: configurable-allowlist variant (e.g. Mantle supports
     # custom/namespace but rejects local_shell). On the bridge path tools may
     # already be filtered in responses(); this second pass is idempotent.
