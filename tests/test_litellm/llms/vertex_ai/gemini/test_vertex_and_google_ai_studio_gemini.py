@@ -5218,3 +5218,22 @@ class TestModelResponseIteratorCleanup:
 
         mock_iterator.aclose.assert_awaited_once()
         mock_response.aclose.assert_awaited_once()
+
+
+def test_gemini_37_38_flash_never_send_minimal_thinking_level():
+    """gemini-3.7-flash / 3.8-flash reject thinkingLevel=MINIMAL (400); none/minimal must map to low,
+    while other 3.x Flash models keep minimal and medium stays medium."""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    m = VertexGeminiConfig._map_reasoning_effort_to_thinking_level
+    for model in ["gemini-3.8-flash", "gemini/gemini-3.8-flash", "gemini-3.7-flash"]:
+        assert [m(e, model)["thinkingLevel"] for e in ["none", "disable", "minimal", "medium"]] == [
+            "low",
+            "low",
+            "low",
+            "medium",
+        ]
+    assert m("none", "gemini-3.6-flash")["thinkingLevel"] == "minimal"
+    assert m("minimal", "gemini-3-flash-preview")["thinkingLevel"] == "minimal"
