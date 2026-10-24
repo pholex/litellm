@@ -1,9 +1,12 @@
 import time
 import uuid
-from typing import Any, Dict, List, Optional, Union, cast
+from typing import Any, Dict, List, Optional, Set, Union, cast
 
 import litellm
 from litellm.main import stream_chunk_builder
+from litellm.responses.litellm_completion_transformation.custom_tool_bridge import (
+    CustomToolStreamRewriter,
+)
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
@@ -57,7 +60,13 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         responses_api_request: ResponsesAPIOptionalRequestParams,
         custom_llm_provider: Optional[str] = None,
         litellm_metadata: Optional[dict] = None,
+        custom_tool_names: Optional[Set[str]] = None,
     ):
+        # bridge_custom_tools_as_functions: rewrite function_call events of
+        # Codex custom tools back into custom_tool_call items (see custom_tool_bridge).
+        self._custom_tool_rewriter: Optional[CustomToolStreamRewriter] = (
+            CustomToolStreamRewriter(set(custom_tool_names)) if custom_tool_names else None
+        )
         self.model: str = model
         self.litellm_custom_stream_wrapper: litellm.CustomStreamWrapper = litellm_custom_stream_wrapper
         self.request_input: Union[str, ResponseInputParam] = request_input
@@ -805,6 +814,20 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         ResponseCompletedEvent,
         BaseLiteLLMOpenAIResponseObject,
     ]:
+        if self._custom_tool_rewriter is None:
+            return await self._anext_bridge_event()
+        while True:
+            event = self._custom_tool_rewriter.rewrite(await self._anext_bridge_event())
+            if event is not None:
+                return event
+
+    async def _anext_bridge_event(
+        self,
+    ) -> Union[
+        ResponsesAPIStreamingResponse,
+        ResponseCompletedEvent,
+        BaseLiteLLMOpenAIResponseObject,
+    ]:
         try:
             while True:
                 if self.finished is True:
@@ -905,6 +928,20 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         return self
 
     def __next__(
+        self,
+    ) -> Union[
+        ResponsesAPIStreamingResponse,
+        ResponseCompletedEvent,
+        BaseLiteLLMOpenAIResponseObject,
+    ]:
+        if self._custom_tool_rewriter is None:
+            return self._next_bridge_event()
+        while True:
+            event = self._custom_tool_rewriter.rewrite(self._next_bridge_event())
+            if event is not None:
+                return event
+
+    def _next_bridge_event(
         self,
     ) -> Union[
         ResponsesAPIStreamingResponse,

@@ -2,9 +2,14 @@
 Handler for transforming responses api requests to litellm.completion requests
 """
 
-from typing import Any, Coroutine, Dict, Optional, Union
+from typing import Any, Coroutine, Dict, Optional, Set, Union
 
 import litellm
+from litellm.responses.litellm_completion_transformation.custom_tool_bridge import (
+    drop_empty_assistant_messages,
+    pop_custom_tool_names,
+    rewrite_response_object,
+)
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
 )
@@ -36,6 +41,8 @@ class LiteLLMCompletionTransformationHandler:
         BaseResponsesAPIStreamingIterator,
         Coroutine[Any, Any, Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]],
     ]:
+        custom_tool_names = pop_custom_tool_names(kwargs)
+        input = drop_empty_assistant_messages(input)
         litellm_completion_request: dict = (
             LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
                 model=model,
@@ -53,6 +60,7 @@ class LiteLLMCompletionTransformationHandler:
                 litellm_completion_request=litellm_completion_request,
                 request_input=input,
                 responses_api_request=responses_api_request,
+                custom_tool_names=custom_tool_names,
                 **kwargs,
             )
 
@@ -73,11 +81,13 @@ class LiteLLMCompletionTransformationHandler:
                     responses_api_request=responses_api_request,
                 )
             )
+            rewrite_response_object(responses_api_response, custom_tool_names)
 
             return responses_api_response
 
         elif isinstance(litellm_completion_response, litellm.CustomStreamWrapper):
             return LiteLLMCompletionStreamingIterator(
+                custom_tool_names=custom_tool_names,
                 model=model,
                 litellm_custom_stream_wrapper=litellm_completion_response,
                 request_input=input,
@@ -92,8 +102,10 @@ class LiteLLMCompletionTransformationHandler:
         litellm_completion_request: dict,
         request_input: Union[str, ResponseInputParam],
         responses_api_request: ResponsesAPIOptionalRequestParams,
+        custom_tool_names: Optional[Set[str]] = None,
         **kwargs,
     ) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
+        custom_tool_names = custom_tool_names or set()
         previous_response_id: Optional[str] = responses_api_request.get("previous_response_id")
         if previous_response_id:
             litellm_completion_request = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
@@ -118,11 +130,13 @@ class LiteLLMCompletionTransformationHandler:
                     responses_api_request=responses_api_request,
                 )
             )
+            rewrite_response_object(responses_api_response, custom_tool_names)
 
             return responses_api_response
 
         elif isinstance(litellm_completion_response, litellm.CustomStreamWrapper):
             return LiteLLMCompletionStreamingIterator(
+                custom_tool_names=custom_tool_names,
                 model=litellm_completion_request.get("model") or "",
                 litellm_custom_stream_wrapper=litellm_completion_response,
                 request_input=request_input,

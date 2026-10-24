@@ -925,6 +925,22 @@ def responses(
         _allowed_tool_types = kwargs.get("allowed_tool_types")
         if _allowed_tool_types is None and kwargs.get("drop_namespace_tools"):
             _allowed_tool_types = ["function"]
+        # Per-deployment opt-in (litellm_params bridge_custom_tools_as_functions):
+        # expose Codex `custom` tools (apply_patch) to chat-completions upstreams
+        # as single-string-argument function tools; the bridge maps the calls
+        # back to custom_tool_call items. Converted before the allowlist below so
+        # drop_namespace_tools does not discard them.
+        _bridge_custom_tools = bool(kwargs.get("bridge_custom_tools_as_functions"))
+        if _bridge_custom_tools and _allowed_tool_types is None:
+            from litellm.responses.litellm_completion_transformation.custom_tool_bridge import (
+                convert_custom_tools_request,
+                stash_custom_tool_names,
+            )
+
+            tools, input, _custom_names = convert_custom_tools_request(tools=tools, input=input)
+            local_vars["tools"] = tools
+            local_vars["input"] = input
+            stash_custom_tool_names(kwargs, _custom_names)
         if _allowed_tool_types is not None:
             # Codex Desktop (0.145 alpha) delivers its tools inside an input
             # item {type: "additional_tools", role: "developer", tools: [...]}
@@ -955,6 +971,15 @@ def responses(
                     if _relocated_tools:
                         tools = list(tools) if tools is not None else []
                         tools.extend(_relocated_tools)
+            if _bridge_custom_tools:
+                from litellm.responses.litellm_completion_transformation.custom_tool_bridge import (
+                    convert_custom_tools_request,
+                    stash_custom_tool_names,
+                )
+
+                tools, input, _custom_names = convert_custom_tools_request(tools=tools, input=input)
+                local_vars["input"] = input
+                stash_custom_tool_names(kwargs, _custom_names)
             if tools is not None:
                 tools = filter_tools_by_allowed_types(
                     tools=list(tools), allowed_tool_types=_allowed_tool_types
@@ -1209,6 +1234,8 @@ def responses(
                 timeout=timeout if timeout is not None else request_timeout,
                 **kwargs,
             )
+
+        kwargs.pop("_bridge_custom_tool_names", None)  # only meaningful for the chat-completions bridge
 
         # Get optional parameters for the responses API
         responses_api_request_params: Dict = ResponsesAPIRequestUtils.get_optional_params_responses_api(
