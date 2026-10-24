@@ -904,6 +904,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         # minimal is accepted by most 3.x Flash models, but 3.7/3.8-flash reject it -> use low there.
         supports_minimal = VertexGeminiConfig._supports_minimal_thinking_level(model)
         is_gemini31pro = model and ("gemini-3.1-pro-preview" in model.lower())
+        # Gemini 4 (gemini-4-argon) accepts thinkingLevel=medium (probed 2026-10-24);
+        # without this, medium was silently upgraded to high (more thinking, more cost).
+        is_gemini4 = bool(model) and model.split("/")[-1].lower().startswith("gemini-4")
         if reasoning_effort == "minimal":
             if supports_minimal:
                 return {"thinkingLevel": "minimal", "includeThoughts": True}
@@ -912,11 +915,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         elif reasoning_effort == "low":
             return {"thinkingLevel": "low", "includeThoughts": True}
         elif reasoning_effort == "medium":
-            if is_gemini31pro or is_gemini3flash:
+            if is_gemini31pro or is_gemini3flash or is_gemini4:
                 return {"thinkingLevel": "medium", "includeThoughts": True}
             else:
                 return {"thinkingLevel": "high", "includeThoughts": True}
-        elif reasoning_effort == "high":
+        elif reasoning_effort in ("high", "xhigh", "max"):
+            # Gemini thinkingLevel tops out at HIGH; Vertex 400s on "xhigh" ("Invalid value at
+            # generation_config.thinking_config.thinking_level"). Codex offers xhigh, which used to
+            # raise "Invalid reasoning effort: xhigh" and fall back to another model.
             return {"thinkingLevel": "high", "includeThoughts": True}
         elif reasoning_effort == "disable":
             # Gemini 3 cannot fully disable thinking, so we use "minimal" for gemini-3-flash-preview, "low" for others

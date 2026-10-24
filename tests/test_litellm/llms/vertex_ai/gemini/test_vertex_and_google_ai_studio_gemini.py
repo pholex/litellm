@@ -5237,3 +5237,17 @@ def test_gemini_37_38_flash_never_send_minimal_thinking_level():
         ]
     assert m("none", "gemini-3.6-flash")["thinkingLevel"] == "minimal"
     assert m("minimal", "gemini-3-flash-preview")["thinkingLevel"] == "minimal"
+
+
+def test_gemini_xhigh_maps_to_high_and_gemini4_keeps_medium():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    m = VertexGeminiConfig._map_reasoning_effort_to_thinking_level
+    for model in ["gemini-4-argon", "gemini-3.8-flash", "gemini-3-pro-preview"]:
+        assert m("xhigh", model)["thinkingLevel"] == "high"
+        assert m("max", model)["thinkingLevel"] == "high"
+    assert m("medium", "gemini-4-argon")["thinkingLevel"] == "medium"
+    assert m("medium", "gemini/gemini-4-argon")["thinkingLevel"] == "medium"
+    assert m("medium", "gemini-3-pro-preview")["thinkingLevel"] == "high"
