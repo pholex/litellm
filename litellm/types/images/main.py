@@ -21,6 +21,10 @@ class ImageEditOptionalRequestParams(TypedDict, total=False):
     size: Optional[str]
     user: Optional[str]
     imageConfig: Optional[Dict[str, Any]]
+    # GPT Image output options (also valid on /images/edits); were silently dropped before.
+    output_format: Optional[Literal["png", "jpeg", "webp"]]
+    output_compression: Optional[int]
+    moderation: Optional[Literal["auto", "low"]]
     thinkingConfig: Optional[Dict[str, Any]]  # Gemini thinking image models (gemini-nano-banana-2.1)
 
 
