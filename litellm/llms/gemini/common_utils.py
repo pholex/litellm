@@ -280,6 +280,19 @@ def get_gemini_image_generation_config(
     if image_config:
         generation_config["imageConfig"] = image_config
 
+    # Thinking image models (gemini-nano-banana-2.1): pass thinkingConfig through, e.g.
+    # {"thinkingLevel": "HIGH"}. Multipart image edits deliver it as a JSON string.
+    thinking_config = optional_params.get("thinkingConfig")
+    if isinstance(thinking_config, str):
+        try:
+            thinking_config = json.loads(thinking_config)
+        except json.JSONDecodeError as exc:
+            raise litellm.UnsupportedParamsError(
+                model=model, message="`thinkingConfig` must be valid JSON when provided as a string."
+            ) from exc
+    if isinstance(thinking_config, dict) and thinking_config:
+        generation_config["thinkingConfig"] = thinking_config
+
     candidate_count = next(
         (
             optional_params[key]

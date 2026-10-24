@@ -21,6 +21,7 @@ class ImageEditOptionalRequestParams(TypedDict, total=False):
     size: Optional[str]
     user: Optional[str]
     imageConfig: Optional[Dict[str, Any]]
+    thinkingConfig: Optional[Dict[str, Any]]  # Gemini thinking image models (gemini-nano-banana-2.1)
 
 
 class ImageEditRequestParams(ImageEditOptionalRequestParams, total=False):

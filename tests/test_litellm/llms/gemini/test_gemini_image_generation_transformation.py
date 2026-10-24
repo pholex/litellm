@@ -478,3 +478,16 @@ def test_gemini_image_generation_skips_thought_images_and_bills_thoughts():
     assert usage["output_tokens"] == 1760
     assert usage["completion_tokens_details"]["image_tokens"] == 1120
     assert usage["completion_tokens_details"]["text_tokens"] == 640
+
+
+def test_gemini_image_generation_passes_thinking_config():
+    from litellm.llms.gemini.common_utils import get_gemini_image_generation_config
+
+    assert get_gemini_image_generation_config(
+        model="gemini-nano-banana-2.1", optional_params={"thinkingConfig": {"thinkingLevel": "HIGH"}}
+    )["thinkingConfig"] == {"thinkingLevel": "HIGH"}
+    # multipart edits deliver it as a JSON string
+    assert get_gemini_image_generation_config(
+        model="gemini-nano-banana-2.1", optional_params={"thinkingConfig": '{"thinkingLevel": "MINIMAL"}'}
+    )["thinkingConfig"] == {"thinkingLevel": "MINIMAL"}
+    assert "thinkingConfig" not in get_gemini_image_generation_config(model="gemini-nano-banana-2.1", optional_params={})

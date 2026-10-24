@@ -34,7 +34,7 @@ else:
 
 class GeminiImageEditConfig(BaseImageEditConfig):
     DEFAULT_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta"
-    SUPPORTED_PARAMS: List[str] = ["n", "size", "imageConfig"]
+    SUPPORTED_PARAMS: List[str] = ["n", "size", "imageConfig", "thinkingConfig"]
 
     def get_supported_openai_params(self, model: str) -> List[str]:
         return list(self.SUPPORTED_PARAMS)
