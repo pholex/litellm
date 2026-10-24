@@ -7334,6 +7334,49 @@ def validate_and_fix_openai_tools(tools: Optional[List]) -> Optional[List[dict]]
     return new_tools
 
 
+def inline_image_urls_in_messages(messages: List[Any]) -> List[Any]:
+    """
+    Replace http(s) ``image_url`` parts with base64 data URLs (copy-on-write).
+
+    For upstreams that only accept inline images (Moonshot/Kimi: 400
+    "unsupported image url"). Uses ``convert_url_to_base64`` (SSRF-guarded
+    ``safe_get``, MAX_IMAGE_URL_DOWNLOAD_SIZE_MB cap, small in-memory cache).
+    Enabled per deployment via the litellm_param ``inline_image_urls: true``.
+    """
+    from litellm.litellm_core_utils.prompt_templates.image_handling import (
+        convert_url_to_base64,
+    )
+
+    def _is_remote(url: Any) -> bool:
+        return isinstance(url, str) and url.lower().startswith(("http://", "https://"))
+
+    new_messages: List[Any] = []
+    changed = False
+    for message in messages:
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            new_messages.append(message)
+            continue
+        new_content = []
+        msg_changed = False
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "image_url":
+                image_url = part.get("image_url")
+                url = image_url.get("url") if isinstance(image_url, dict) else image_url
+                if _is_remote(url):
+                    data_url = convert_url_to_base64(url)
+                    new_image_url = dict(image_url) if isinstance(image_url, dict) else {}
+                    new_image_url["url"] = data_url
+                    part = {**part, "image_url": new_image_url}
+                    msg_changed = True
+            new_content.append(part)
+        if msg_changed:
+            message = {**message, "content": new_content}
+            changed = True
+        new_messages.append(message)
+    return new_messages if changed else messages
+
+
 def drop_namespace_tools(tools: Optional[List[dict]]) -> Optional[List[dict]]:
     """
     Keep only ``function``-type tools; drop every other tool type.

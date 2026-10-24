@@ -3196,6 +3196,7 @@ all_litellm_params = (
         "use_chat_completions_api",
         "drop_namespace_tools",
         "bridge_custom_tools_as_functions",
+        "inline_image_urls",
         "_bridge_custom_tool_names",
         "allowed_tool_types",
         "reasoning_summary_override",

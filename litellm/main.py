@@ -173,6 +173,7 @@ from litellm.utils import (
     validate_and_fix_openai_messages,
     validate_and_fix_openai_tools,
     drop_namespace_tools,
+    inline_image_urls_in_messages,
     filter_tools_by_allowed_types,
     flatten_tool_schema_unions,
     validate_and_fix_thinking_param,
@@ -4816,6 +4817,13 @@ def completion(  # type: ignore
     # flag into (a)completion kwargs).
     if kwargs.get("drop_namespace_tools") and tools is not None:
         tools = drop_namespace_tools(tools)
+    # Per-deployment opt-in (litellm_param inline_image_urls: true): Moonshot/Kimi
+    # rejects public image URLs (400 "Invalid request: unsupported image url"),
+    # accepting only base64 data URLs. Download http(s) image_url parts with
+    # litellm's SSRF-guarded, size-capped fetcher and inline them. Covers the
+    # direct /chat/completions path and the /responses bridge (input_image).
+    if kwargs.get("inline_image_urls") and messages:
+        messages = inline_image_urls_in_messages(messages)
     # allowed_tool_types: configurable-allowlist variant (e.g. Mantle supports
     # custom/namespace but rejects local_shell). On the bridge path tools may
     # already be filtered in responses(); this second pass is idempotent.
