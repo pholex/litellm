@@ -2,6 +2,7 @@
 ## httpx client for vertex ai calls
 ## Initial implementation - covers gemini + image gen calls
 import json
+import re
 import time
 from copy import deepcopy
 from functools import partial
@@ -273,20 +274,23 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @staticmethod
     def _is_gemini_3_or_newer(model: str) -> bool:
         """
-        Check if the model is Gemini 3 Pro or newer.
+        Check if the model is Gemini 3 or newer.
 
-        Gemini 3 models include:
-        - gemini-3-pro-preview
-        - gemini-3-flash
-        - gemini-3-flash-preview (Gemini 3 Flash)
-        - gemini-3.1-pro-preview, gemini-3.1-flash, gemini-3.1-flash-lite-preview
-        - gemini-3.5-flash
-        - Any future Gemini 3.x models
+        Backported from upstream b395bfefdd (#42640): the old substring check
+        ("gemini-3" in model) missed Gemini 4 (gemini-4-argon) and the renamed
+        image line (gemini-nano-banana-2.1), so they were sent a thinkingBudget
+        (400 "Use thinking level instead") and lost Gemini 3+ handling.
         """
-        # Check for Gemini 3 models
-        if "gemini-3" in model:
-            return True
-        return False
+        model_name = model.split("/")[-1].lower()
+        is_vertex_fine_tuned_model = model_name.isdigit() or (
+            model.startswith("gemini/") and not model_name.startswith("gemini-")
+        )
+        if not model_name or is_vertex_fine_tuned_model or model_name.startswith("gemma-"):
+            return False
+        # Pre-Gemini 3 models: gemini-1.x, gemini-2.x, gemini-pro, gemini-flash, gemini-exp
+        if re.match(r"^gemini-(?:[12](?:\.\d+)?|exp|(?:pro|flash)(?!-(?:lite-)?latest$))(?:-|$)", model_name):
+            return False
+        return True
 
     @staticmethod
     def _forward_gemini_function_call_id(model: str, custom_llm_provider: Optional[str] = None) -> bool:

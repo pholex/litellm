@@ -2116,6 +2116,14 @@ def test_is_gemini_3_or_newer():
     # Edge cases
     assert VertexGeminiConfig._is_gemini_3_or_newer("") == False
 
+    # Gemini 4 and renamed image line (fork backport of upstream b395bfefdd)
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-4-argon") == True
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini/gemini-4-argon") == True
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-nano-banana-2.1") == True
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-2.5-flash-image") == False
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemma-3-27b-it") == False
+    assert VertexGeminiConfig._is_gemini_3_or_newer("vertex_ai/1234567890") == False
+
 
 def test_forward_gemini_function_call_id_vertex_vs_google_ai_studio():
     """Vertex AI rejects `id` on function_call/function_response; Google AI Studio accepts it on Gemini 3.5+."""
