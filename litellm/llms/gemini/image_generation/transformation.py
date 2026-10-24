@@ -135,7 +135,8 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         # For Gemini Flash Image Preview models, use standard Gemini format
         if is_gemini_image_model(model):
             request_body: dict = {
-                "contents": [{"parts": [{"text": prompt}]}],
+                # role is required by the Vertex AI endpoint (400 "Please use a valid role"); AI Studio accepts it too.
+                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
                 "generationConfig": get_gemini_image_generation_config(
                     model=model,
                     optional_params=optional_params,
@@ -198,6 +199,10 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                 content = candidate.get("content", {})
                 parts = content.get("parts", [])
                 for part in parts:
+                    # Thinking image models (gemini-nano-banana-2.1) emit draft images
+                    # flagged thought=true before the final one; never return drafts.
+                    if part.get("thought") is True:
+                        continue
                     # Look for inlineData with image
                     if "inlineData" in part:
                         inline_data = part["inlineData"]

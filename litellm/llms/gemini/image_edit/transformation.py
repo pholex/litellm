@@ -102,6 +102,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
 
         contents = [
             {
+                "role": "user",  # required by the Vertex AI endpoint
                 "parts": parts,
             }
         ]
@@ -139,6 +140,8 @@ class GeminiImageEditConfig(BaseImageEditConfig):
             content = candidate.get("content", {})
             parts = content.get("parts", [])
             for part in parts:
+                if part.get("thought") is True:  # draft image from a thinking model
+                    continue
                 inline_data = part.get("inlineData")
                 if inline_data and inline_data.get("data"):
                     data_list.append(

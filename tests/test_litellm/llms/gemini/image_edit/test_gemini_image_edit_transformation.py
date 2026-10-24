@@ -264,3 +264,36 @@ class TestGeminiImageEditTransformation:
         Without this, Gemini returns: "Invalid JSON payload received. Unexpected token."
         """
         assert self.config.use_multipart_form_data() is False
+
+
+def test_gemini_image_edit_sets_user_role_and_skips_thought_images() -> None:
+    config = GeminiImageEditConfig()
+    request_body, _ = config.transform_image_edit_request(
+        model="gemini-nano-banana-2.1",
+        prompt="make it red",
+        image=[BytesIO(b"img")],
+        image_edit_optional_request_params={},
+        litellm_params=MagicMock(),
+        headers={},
+    )
+    assert request_body["contents"][0]["role"] == "user"
+
+    raw_response = httpx.Response(
+        status_code=200,
+        json={
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {"inlineData": {"mimeType": "image/png", "data": "ZHJhZnQ="}, "thought": True},
+                            {"inlineData": {"mimeType": "image/png", "data": "ZmluYWw="}},
+                        ]
+                    }
+                }
+            ]
+        },
+    )
+    response = config.transform_image_edit_response(
+        model="gemini-nano-banana-2.1", raw_response=raw_response, logging_obj=MagicMock()
+    )
+    assert [d.b64_json for d in response.data] == ["ZmluYWw="]

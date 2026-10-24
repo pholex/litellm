@@ -419,3 +419,62 @@ def test_gemini_image_generation_response_without_grounding_has_no_web_search_re
     )
 
     assert getattr(result.usage, "web_search_requests", None) is None
+
+
+def test_gemini_image_generation_request_sets_user_role():
+    """The Vertex AI generateContent endpoint rejects contents without a role (400)."""
+    request = GoogleImageGenConfig().transform_image_generation_request(
+        model="gemini-nano-banana-2.1",
+        prompt="A paper plane",
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["contents"][0]["role"] == "user"
+
+
+def test_gemini_image_generation_skips_thought_images_and_bills_thoughts():
+    """Thinking image models emit a draft image flagged thought=true before the final
+    image, and report reasoning tokens in thoughtsTokenCount outside candidatesTokenCount."""
+    raw_response = httpx.Response(
+        status_code=200,
+        json={
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {"text": "planning", "thought": True},
+                            {"inlineData": {"mimeType": "image/png", "data": "draft"}, "thought": True},
+                            {"inlineData": {"mimeType": "image/png", "data": "final"}, "thoughtSignature": "sig"},
+                        ]
+                    }
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 11,
+                "candidatesTokenCount": 1120,
+                "totalTokenCount": 1771,
+                "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 11}],
+                "candidatesTokensDetails": [{"modality": "IMAGE", "tokenCount": 1120}],
+                "thoughtsTokenCount": 640,
+            },
+        },
+    )
+
+    result = GoogleImageGenConfig().transform_image_generation_response(
+        model="gemini-nano-banana-2.1",
+        raw_response=raw_response,
+        model_response=ImageResponse(data=[]),
+        logging_obj=None,
+        request_data={},
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert [d.b64_json for d in result.data] == ["final"]
+    usage = result.model_dump()["usage"]
+    assert usage["output_tokens"] == 1760
+    assert usage["completion_tokens_details"]["image_tokens"] == 1120
+    assert usage["completion_tokens_details"]["text_tokens"] == 640

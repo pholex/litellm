@@ -51,6 +51,13 @@ def transform_gemini_image_usage(usage_metadata: dict) -> ImageUsage:
         if output_tokens > known_output_tokens:
             output_tokens_details.text_tokens += output_tokens - known_output_tokens
 
+    # Thinking image models report reasoning tokens separately in thoughtsTokenCount
+    # (not part of candidatesTokenCount); Google bills them at the text-output rate.
+    thoughts_tokens = usage_metadata.get("thoughtsTokenCount", usage_metadata.get("thoughts_token_count", 0))
+    if isinstance(thoughts_tokens, int) and thoughts_tokens > 0:
+        output_tokens += thoughts_tokens
+        output_tokens_details.text_tokens += thoughts_tokens
+
     usage_payload: dict[str, Any] = {
         "input_tokens": usage_metadata.get("promptTokenCount", 0),
         "input_tokens_details": input_tokens_details,
