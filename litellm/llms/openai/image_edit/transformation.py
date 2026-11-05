@@ -41,6 +41,9 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
             "prompt",
             "background",
             "input_fidelity",
+            "complexity",
+            "markup",
+            "safety_identifier",
             "mask",
             "model",
             "n",
@@ -113,7 +116,10 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         #########################################################
         _image_list = request_dict.get("image")
         _mask = request_dict.get("mask")
-        data_without_files = {k: v for k, v in request_dict.items() if k not in ["image", "mask"]}
+        _markup = request_dict.get("markup")
+        if _markup is not None and _mask is not None:
+            raise OpenAIError(message="markup cannot be combined with mask", status_code=400)
+        data_without_files = {k: v for k, v in request_dict.items() if k not in ["image", "mask", "markup"]}
         files_list: List[Tuple[str, Any]] = []
 
         # Handle image parameter
@@ -139,6 +145,9 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
                     files_list.append(("mask", (_mask.name, _mask, mask_content_type)))
                 else:
                     files_list.append(("mask", ("mask.png", _mask, mask_content_type)))
+
+        if _markup is not None:
+            self._add_image_to_files(files_list, _markup, "markup")
 
         return data_without_files, files_list
 

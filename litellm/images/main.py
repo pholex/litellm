@@ -843,6 +843,8 @@ def image_edit(
             raise ValueError(f"image edit is not supported for {custom_llm_provider}")
 
         local_vars.update(kwargs)
+        if isinstance(extra_body, dict):
+            local_vars.update({k: v for k, v in extra_body.items() if local_vars.get(k) is None})
         # Get ImageEditOptionalRequestParams with only valid parameters
         image_edit_optional_params: ImageEditOptionalRequestParams = (
             _get_ImageEditRequestUtils().get_requested_image_edit_optional_param(local_vars)

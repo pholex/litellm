@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Literal, Optional
 
 from typing_extensions import TypedDict
 
@@ -13,6 +13,9 @@ class ImageEditOptionalRequestParams(TypedDict, total=False):
     """
 
     background: Optional[Literal["transparent", "opaque", "auto"]]
+    complexity: Optional[Literal["low", "medium", "high"]]
+    markup: Optional[FileTypes]
+    safety_identifier: Optional[str]
     input_fidelity: Optional[Literal["high", "low"]]
     mask: Optional[str]
     n: Optional[int]

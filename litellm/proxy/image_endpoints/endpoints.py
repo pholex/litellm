@@ -21,6 +21,7 @@ router = APIRouter()
 
 import io
 
+from starlette.datastructures import UploadFile as StarletteUploadFile
 from fastapi import UploadFile
 
 
@@ -287,6 +288,7 @@ async def image_edit_api(
     image_array: Optional[List[UploadFile]] = File(None, alias="image[]"),
     mask: Optional[List[UploadFile]] = File(None),
     mask_array: Optional[List[UploadFile]] = File(None, alias="mask[]"),
+    markup: Optional[UploadFile] = File(None),
     model: Optional[str] = None,
 ):
     """
@@ -345,7 +347,14 @@ async def image_edit_api(
     if mask_files:
         data["mask"] = mask_files
 
-    for _field in ("image", "mask"):
+    if isinstance(markup, StarletteUploadFile):
+        data["markup"] = await uploadfile_to_bytesio(markup)
+    elif isinstance(data.get("markup"), dict):
+        data["markup"] = json_images_to_bytesio([data["markup"]])[0]
+    if data.get("markup") is not None and data.get("mask") is not None:
+        raise HTTPException(status_code=400, detail="markup cannot be combined with mask")
+
+    for _field in ("image", "mask", "markup"):
         if _field in data and isinstance(data[_field], str):
             raise HTTPException(
                 status_code=422,
