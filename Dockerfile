@@ -110,7 +110,7 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 USER root
 
 # node (without npm) is required by the prisma CLI at runtime
-RUN apk add --no-cache bash openssl tzdata libsndfile
+RUN apk add --no-cache bash openssl tzdata libsndfile libstdc++
 COPY --from=builder /opt/node /opt/node
 
 WORKDIR /app
@@ -151,3 +151,5 @@ EXPOSE 4000/tcp
 
 ENTRYPOINT ["docker/prod_entrypoint.sh"]
 CMD ["--port", "4000"]
+
+RUN node --version && python -c "from tokenizers import Tokenizer; import litellm"
