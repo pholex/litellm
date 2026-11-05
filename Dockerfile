@@ -43,9 +43,15 @@ RUN apk add --no-cache \
     rust \
     openssl \
     openssl-dev \
-    nodejs \
-    npm \
+    curl \
+    xz \
     libsndfile
+
+RUN curl -fsSL https://nodejs.org/dist/v22.23.4/node-v22.23.4-linux-x64.tar.xz -o /tmp/node.tar.xz && \
+    echo "1805bcd35e6815559bd2eb97db438d3fdb0eb3a5e6a977b7c1badca76337e9ce  /tmp/node.tar.xz" | sha256sum -c - && \
+    mkdir -p /opt/node && tar -xJf /tmp/node.tar.xz -C /opt/node --strip-components=1 && \
+    rm /tmp/node.tar.xz && /opt/node/bin/node --version
+ENV PATH="/opt/node/bin:${PATH}"
 
 # Python comes from uv's managed CPython (python-build-standalone), not the
 # Wolfi apk repo: the base image is digest pinned while apk resolves against the
@@ -104,10 +110,11 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 USER root
 
 # node (without npm) is required by the prisma CLI at runtime
-RUN apk add --no-cache bash openssl tzdata nodejs libsndfile
+RUN apk add --no-cache bash openssl tzdata libsndfile
+COPY --from=builder /opt/node /opt/node
 
 WORKDIR /app
-ENV PATH="/app/.venv/bin:${PATH}" \
+ENV PATH="/app/.venv/bin:/opt/node/bin:${PATH}" \
     PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries \
     PRISMA_CLI_PATH=/opt/prisma/binaries/node_modules/.bin/prisma \
     PRISMA_CLI_QUERY_ENGINE_TYPE=binary \
