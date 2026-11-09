@@ -4084,3 +4084,29 @@ async def test_auth_path_caches_team_object_under_canonical_team_id_key():
     assert served is not None and served.team_id == team_id
     assert cache.get_cache(key=team_id) is None
     assert cache.get_cache(key=None) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("envelope", ["raw", "storage", "session"])
+async def test_metadata_ciphertext_is_rejected_by_admin_route_auth(monkeypatch, envelope):
+    from fastapi import Request
+
+    from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
+
+    monkeypatch.delenv("EXPERIMENTAL_UI_LOGIN", raising=False)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "isolated-security-regression-salt")
+    claims = UserAPIKeyAuth(user_id="security-regression", user_role=LitellmUserRoles.PROXY_ADMIN).model_dump_json(
+        exclude_none=True
+    )
+    metadata = encrypt_callback_vars({"logging": [{"callback_vars": {"langfuse_secret_key": claims}}]})
+    stored = metadata["logging"][0]["callback_vars"]["langfuse_secret_key"]
+    raw = stored.removeprefix("litellm_enc::")
+    bearer = {"raw": raw, "storage": stored, "session": "litellm_login_" + raw}[envelope]
+    request = Request({"type": "http", "method": "GET", "path": "/user/list", "headers": [], "query_string": b""})
+    with (
+        patch("litellm.proxy.proxy_server.master_key", "sk-regression-master"),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        pytest.raises(ProxyException) as exc_info,
+    ):
+        await user_api_key_auth(request=request, api_key=f"Bearer {bearer}")
+    assert int(exc_info.value.code) == status.HTTP_401_UNAUTHORIZED

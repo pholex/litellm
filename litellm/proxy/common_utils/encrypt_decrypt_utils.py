@@ -1,6 +1,7 @@
 import base64
+import hashlib
 import os
-from typing import Literal, Optional
+from typing import Final, Literal, Optional
 
 from litellm._logging import verbose_proxy_logger
 
@@ -14,6 +15,41 @@ def _get_salt_key():
         salt_key = master_key
 
     return salt_key
+
+
+def encrypt_bearer_token(value: str, prefix: str) -> str:
+    """Bind session ciphertext to its token kind using AES-GCM authenticated data."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    salt_key: Final = _get_salt_key()
+    if not isinstance(salt_key, str) or not salt_key:
+        raise ValueError("Set LITELLM_SALT_KEY or a master key to mint bearer tokens")
+    nonce: Final = os.urandom(12)
+    sealed: Final = nonce + AESGCM(hashlib.sha256(salt_key.encode()).digest()).encrypt(
+        nonce, value.encode("utf-8"), prefix.encode("utf-8")
+    )
+    return prefix + base64.urlsafe_b64encode(sealed).decode("ascii").rstrip("=")
+
+
+def decrypt_bearer_token(token: str, prefix: str) -> Optional[str]:
+    from cryptography.exceptions import InvalidTag
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    if not token.startswith(prefix):
+        return None
+    salt_key: Final = _get_salt_key()
+    if not isinstance(salt_key, str) or not salt_key:
+        return None
+    encoded: Final = token.removeprefix(prefix)
+    try:
+        sealed: Final = base64.b64decode(encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True)
+        return (
+            AESGCM(hashlib.sha256(salt_key.encode()).digest())
+            .decrypt(sealed[:12], sealed[12:], prefix.encode("utf-8"))
+            .decode("utf-8")
+        )
+    except (ValueError, InvalidTag, UnicodeError):
+        return None
 
 
 def encrypt_value_helper(value: str, new_encryption_key: Optional[str] = None):
