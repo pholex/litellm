@@ -1066,7 +1066,9 @@ class CostCalculatorUtils:
         elif custom_llm_provider == litellm.LlmProviders.OPENAI.value:
             # gpt-image models use token-based pricing.
             model_lower = model.lower()
-            if "gpt-image" in model_lower:
+            if "gpt-image" in model_lower or model_lower.removeprefix("openai/") in (
+                "minimax-h3-image", "minimax-h3-image-highspeed"
+            ):
                 from litellm.llms.openai.image_generation.cost_calculator import (
                     cost_calculator as openai_gpt_image_cost_calculator,
                 )

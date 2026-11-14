@@ -19,6 +19,8 @@ class GPTImageGenerationConfig(BaseImageGenerationConfig):
     """
 
     def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
+        if model.lower() in ("minimax-h3-image", "minimax-h3-image-highspeed"):
+            return ["n", "output_compression", "output_format", "response_format", "size"]
         return [
             "background",
             "moderation",

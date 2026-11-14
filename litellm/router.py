@@ -3539,6 +3539,8 @@ class Router:
             verbose_router_logger.info(f"litellm.image_generation(model={model_name})\033[32m 200 OK\033[0m")
             return response
         except Exception as e:
+            if "deployment" in locals():
+                self._set_deployment_num_retries_on_exception(e, deployment)
             verbose_router_logger.info(
                 f"litellm.image_generation(model={model_name})\033[31m Exception {str(e)}\033[0m"
             )
@@ -3626,6 +3628,8 @@ class Router:
             verbose_router_logger.info(f"litellm.aimage_generation(model={model_name})\033[32m 200 OK\033[0m")
             return response
         except Exception as e:
+            if "deployment" in locals():
+                self._set_deployment_num_retries_on_exception(e, deployment)
             verbose_router_logger.info(
                 f"litellm.aimage_generation(model={model_name})\033[31m Exception {str(e)}\033[0m"
             )
@@ -4387,6 +4391,8 @@ class Router:
 
             return response
         except Exception as e:
+            if "deployment" in locals() and getattr(original_generic_function, "__name__", "") == "aimage_edit":
+                self._set_deployment_num_retries_on_exception(e, deployment)
             verbose_router_logger.info(
                 f"ageneric_api_call_with_fallbacks(model={model})\033[31m Exception {str(e)}\033[0m"
             )

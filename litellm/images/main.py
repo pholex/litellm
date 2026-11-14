@@ -475,6 +475,8 @@ def image_generation(
                 optional_params["extra_headers"] = extra_headers
             # Forward OpenAI organization if present (set by proxy pre-call utils)
             organization: Optional[str] = kwargs.get("organization", None)
+            if kwargs.get("max_retries") is not None:
+                optional_params["max_retries"] = kwargs["max_retries"]
             model_response = openai_chat_completions.image_generation(
                 model=model,
                 prompt=prompt,

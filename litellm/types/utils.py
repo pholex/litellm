@@ -2333,6 +2333,8 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
 
         self.quality = kwargs.get("quality", None)
         self.output_format = kwargs.get("output_format", None)
+        if isinstance(kwargs.get("request_id"), str):
+            self.request_id = kwargs["request_id"]
         self.size = kwargs.get("size", None)
         if self.size is None:  # Volcengine Ark returns the size per image (data[].size), not at the top level
             _first = data[0] if data else None
