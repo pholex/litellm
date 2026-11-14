@@ -845,8 +845,8 @@ def calculate_image_response_cost_from_usage(
     prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
     if input_tokens_details is not None:
         prompt_tokens_details = PromptTokensDetailsWrapper(
-            text_tokens=getattr(input_tokens_details, "text_tokens", None),
-            image_tokens=getattr(input_tokens_details, "image_tokens", None),
+            text_tokens=_get_token_detail_value(input_tokens_details, "text_tokens"),
+            image_tokens=_get_token_detail_value(input_tokens_details, "image_tokens"),
             cached_tokens=0,
         )
 
@@ -1064,9 +1064,16 @@ class CostCalculatorUtils:
                 image_response=completion_response,
             )
         elif custom_llm_provider == litellm.LlmProviders.OPENAI.value:
-            # gpt-image models use token-based pricing.
+            # Custom-priced router deployments use an opaque model ID. Respect
+            # their explicit image-token rate instead of falling through to DALL-E.
+            try:
+                image_token_rate = litellm.get_model_info(
+                    model=model, custom_llm_provider=custom_llm_provider
+                ).get("output_cost_per_image_token")
+            except Exception:
+                image_token_rate = None
             model_lower = model.lower()
-            if "gpt-image" in model_lower or model_lower.removeprefix("openai/") in (
+            if image_token_rate is not None or "gpt-image" in model_lower or model_lower.removeprefix("openai/") in (
                 "minimax-h3-image", "minimax-h3-image-highspeed"
             ):
                 from litellm.llms.openai.image_generation.cost_calculator import (

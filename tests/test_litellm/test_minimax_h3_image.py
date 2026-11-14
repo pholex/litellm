@@ -136,3 +136,59 @@ async def test_image_deployment_zero_retries_overrides_router_default(edit, monk
                 await router.aimage_generation(**args)
         assert len(requests) == 1
         router.reset()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model,image_rate,output_rate", [("MiniMax-H3-Image", 10, 25), ("MiniMax-H3-Image-Highspeed", 20, 50)]
+)
+@pytest.mark.parametrize("edit", [False, True])
+async def test_router_registered_deployment_image_token_pricing(model, image_rate, output_rate, edit, monkeypatch):
+    rates = {
+        "input_cost_per_token": 15 / 6.8 / 1e6,
+        "input_cost_per_image_token": image_rate / 6.8 / 1e6,
+        "output_cost_per_token": output_rate / 6.8 / 1e6,
+        "output_cost_per_image_token": output_rate / 6.8 / 1e6,
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=copy.deepcopy(RESPONSE)))
+    ) as http:
+        client = AsyncOpenAI(api_key="synthetic", http_client=http, max_retries=0)
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "h3-priced",
+                    "litellm_params": {
+                        "model": "openai/" + model,
+                        "api_base": "https://minimax.test/v1",
+                        "api_key": "synthetic",
+                        "max_retries": 0,
+                        "num_retries": 0,
+                        **rates,
+                    },
+                    "model_info": {"mode": "image_generation", "hide_from_model_list": True},
+                }
+            ],
+            num_retries=0,
+        )
+        if edit:
+
+            class InjectedHandler(AsyncHTTPHandler):
+                def create_client(self, **kwargs):
+                    return http
+
+            monkeypatch.setattr(
+                "litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client", lambda **kwargs: InjectedHandler()
+            )
+            image = io.BytesIO(
+                base64.b64decode(
+                    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aSyoAAAAASUVORK5CYII="
+                )
+            )
+            response = await router.aimage_edit(model="h3-priced", prompt="A cup", image=image)
+        else:
+            response = await router.aimage_generation(model="h3-priced", prompt="A cup", client=client)
+        assert response._hidden_params["response_cost"] == pytest.approx(
+            (3091 * 15 + 2050 * image_rate + 4096 * output_rate) / 6.8 / 1e6
+        )
+        router.reset()
