@@ -3232,7 +3232,7 @@ wheels = [
 
 [[package]]
 name = "litellm"
-version = "1.91.4+tokenweave.20261116.1"
+version = "1.91.4+tokenweave.20261116.2"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },

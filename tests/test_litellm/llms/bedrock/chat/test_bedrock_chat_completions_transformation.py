@@ -303,3 +303,61 @@ def test_native_cache_usage_preserves_explicit_creation_and_old_usage():
     assert _native_usage(explicit) is explicit
     ordinary = Usage(prompt_tokens=100, completion_tokens=10)
     assert _native_usage(ordinary) is ordinary
+
+
+@pytest.mark.parametrize("effort", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+@pytest.mark.parametrize("summary", ["auto", "detailed", "concise", None])
+@pytest.mark.asyncio
+async def test_reasoning_object_normalized_without_mutation(effort, summary):
+    config = BedrockRuntimeChatConfig()
+    params = {
+        "reasoning_effort": {"effort": effort, "summary": summary},
+        "stream_options": {"include_usage": True},
+        "aws_region_name": "us-east-1",
+    }
+    before = deepcopy(params)
+    messages = [{"role": "user", "content": "Hi"}]
+    sync_body = config.transform_request(MODEL, messages, params, {}, {})
+    async_body = await config.async_transform_request(MODEL, messages, params, {}, {})
+    for body in (sync_body, async_body):
+        assert body["reasoning_effort"] == effort
+        assert "summary" not in body
+        assert body["stream_options"] == {"include_usage": True}
+        assert "aws_region_name" not in body
+    assert params == before
+
+
+@pytest.mark.parametrize("reasoning", [{"summary": "auto"}, {"effort": None, "summary": "detailed"}, {}])
+@pytest.mark.asyncio
+async def test_summary_only_leaves_runtime_default_reasoning(reasoning):
+    config = BedrockRuntimeChatConfig()
+    params = {"reasoning_effort": reasoning}
+    messages = [{"role": "user", "content": "Hi"}]
+    assert "reasoning_effort" not in config.transform_request(MODEL, messages, params, {}, {})
+    assert "reasoning_effort" not in await config.async_transform_request(MODEL, messages, params, {}, {})
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("summary", ["auto", "detailed"])
+@pytest.mark.asyncio
+async def test_responses_summary_bridge_signs_scalar_effort(stream, summary):
+    handler = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(provider_response)) as client:
+        handler.client = client
+        result = await litellm.aresponses(
+            model=MODEL,
+            input="Hi",
+            reasoning={"effort": "low", "summary": summary},
+            max_output_tokens=128,
+            stream=stream,
+            aws_region_name="us-east-1",
+            use_chat_completions_api=True,
+            client=handler,
+            num_retries=0,
+        )
+        if stream:
+            events = [event async for event in result]
+            assert any(event.type == "response.completed" for event in events)
+        else:
+            assert result.status == "completed"

@@ -59,6 +59,17 @@ class BedrockRuntimeChatConfig(AmazonBedrockOpenAIConfig):
     ) -> bool:
         return True
 
+    def _runtime_optional_params(self, optional_params: dict[str, JsonValue]) -> dict[str, JsonValue]:
+        params = {k: v for k, v in optional_params.items() if k not in self.aws_authentication_params}
+        reasoning = params.get("reasoning_effort")
+        if not isinstance(reasoning, dict):
+            return params
+        # The Responses bridge retains summary in a dict; Runtime accepts only effort.
+        return {
+            **{k: v for k, v in params.items() if k != "reasoning_effort"},
+            **({"reasoning_effort": reasoning["effort"]} if reasoning.get("effort") is not None else {}),
+        }
+
     def transform_request(
         self,
         model: str,
@@ -73,7 +84,7 @@ class BedrockRuntimeChatConfig(AmazonBedrockOpenAIConfig):
                 self,
                 model=strip_bedrock_routing_prefix(model),
                 messages=deepcopy(messages),
-                optional_params={k: v for k, v in optional_params.items() if k not in self.aws_authentication_params},
+                optional_params=self._runtime_optional_params(optional_params),
                 litellm_params=litellm_params,
                 headers=headers,
             ),
@@ -93,7 +104,7 @@ class BedrockRuntimeChatConfig(AmazonBedrockOpenAIConfig):
                 self,
                 model=strip_bedrock_routing_prefix(model),
                 messages=deepcopy(messages),
-                optional_params={k: v for k, v in optional_params.items() if k not in self.aws_authentication_params},
+                optional_params=self._runtime_optional_params(optional_params),
                 litellm_params=litellm_params,
                 headers=headers,
             ),
