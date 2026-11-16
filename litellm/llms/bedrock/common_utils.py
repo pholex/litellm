@@ -604,7 +604,7 @@ def is_bedrock_application_inference_profile_arn(model: str) -> bool:
 
 def strip_bedrock_routing_prefix(model: str) -> str:
     """Strip LiteLLM routing prefixes from model name."""
-    for prefix in ["bedrock/", "converse/", "invoke/", "openai/", "nova-2/", "nova/"]:
+    for prefix in ["bedrock/", "chat_completions/", "converse/", "invoke/", "openai/", "nova-2/", "nova/"]:
         if model.startswith(prefix):
             model = model.split("/", 1)[1]
     return model
@@ -896,6 +896,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
         "invoke",
         "claude_platform",
         "converse_like",
+        "chat_completions",
         "agent",
         "agentcore",
         "async_invoke",
@@ -911,6 +912,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
                 "invoke",
                 "claude_platform",
                 "converse_like",
+                "chat_completions",
                 "converse",
                 "agent",
                 "agentcore",
@@ -919,6 +921,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
                 "mantle",
             ],
         ] = {
+            "chat_completions/": "chat_completions",
             "invoke/": "invoke",
             "claude_platform/": "claude_platform",
             "converse_like/": "converse_like",
@@ -1114,6 +1117,10 @@ def get_bedrock_chat_config(model: str):
     base_model = BedrockModelInfo.get_base_model(model)
 
     # Handle explicit routes first
+    if bedrock_route == "chat_completions":
+        from litellm.llms.bedrock.chat.chat_completions_transformation import BedrockRuntimeChatConfig
+
+        return BedrockRuntimeChatConfig()
     if bedrock_route == "claude_platform":
         return litellm.BedrockClaudePlatformConfig()
     elif bedrock_route == "converse" or bedrock_route == "converse_like":

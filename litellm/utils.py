@@ -4013,6 +4013,15 @@ def get_optional_params(
                 optional_params=optional_params,
                 drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
             )
+        elif bedrock_route == "chat_completions":
+            from litellm.llms.bedrock.chat.chat_completions_transformation import BedrockRuntimeChatConfig
+
+            optional_params = BedrockRuntimeChatConfig().map_openai_params(
+                model=model,
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                drop_params=bool(drop_params),
+            )
         elif bedrock_route == "openai":
             optional_params = litellm.AmazonBedrockOpenAIConfig().map_openai_params(
                 model=model,
