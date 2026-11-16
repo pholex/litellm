@@ -62,6 +62,7 @@ from litellm.utils import (
     ProviderConfigManager,
     client,
     filter_tools_by_allowed_types,
+    reconcile_tool_choice_after_tool_filtering,
     flatten_tool_schema_unions,
 )
 
@@ -984,7 +985,9 @@ def responses(
                 tools = filter_tools_by_allowed_types(
                     tools=list(tools), allowed_tool_types=_allowed_tool_types
                 )
+                tool_choice = reconcile_tool_choice_after_tool_filtering(tool_choice, tools)
                 local_vars["tools"] = tools
+                local_vars["tool_choice"] = tool_choice
 
         # Per-deployment flattening of nested oneOf/anyOf in tool schemas
         # (litellm_params flatten_tool_schema_unions). Bedrock-hosted grok-4.7

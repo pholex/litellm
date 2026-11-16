@@ -42,3 +42,7 @@ The final targeted suite passed 69 tests; Ruff, adapter type checking and offlin
 Offline transport tests verify SigV4 against the actual serialized body and temporary session token, sync/async SSE, tools, history, cache preservation, API-key isolation and price calculation. A fixture with 1000 input tokens (400 cached reads and 100 writes) plus 20 output tokens costs USD 0.003278
 
 Production rollout remains separate: build the new fork commit, deploy that image, then add the model configuration. Uploading this configuration to an older image is insufficient. Verify the deployed Task Role, stream/tool behavior and spend records after rollout. No fallback or existing model needs to be changed
+
+## 1.91.4+tokenweave.20261116.1
+
+Restores the tool filtering fixes left on `feat/allowed-tool-types` in July: normalize an initially empty tools list to `None` and reconcile a named `tool_choice` after filtering. Both chat completions and native Responses are covered, including the function-only legacy filter. The existing additional-tools relocation remains intact. This release also includes the Kimi Runtime IAM adapter above

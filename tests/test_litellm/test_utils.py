@@ -4538,3 +4538,134 @@ def test_aws_bedrock_project_id_excluded_from_bedrock_optional_params():
     assert "aws_bedrock_project_id" not in result
     assert result["aws_region_name"] == "us-east-1"
 
+
+
+def test_filter_tools_by_allowed_types_drops_unknown_types():
+    from litellm.utils import filter_tools_by_allowed_types
+
+    kept = {"type": "function", "function": {"name": "kept"}}
+    assert filter_tools_by_allowed_types([{"type": "local_shell"}, kept], ["function"]) == [kept]
+
+
+@pytest.mark.parametrize("tools", [None, [], [{"type": "local_shell"}]])
+def test_filter_tools_by_allowed_types_normalizes_empty(tools):
+    from litellm.utils import filter_tools_by_allowed_types
+
+    assert filter_tools_by_allowed_types(tools, ["function"]) is None
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_reconcile_tool_choice_after_tool_filtering(nested):
+    from litellm.utils import reconcile_tool_choice_after_tool_filtering
+
+    def choice(name):
+        return {"type": "function", **({"function": {"name": name}} if nested else {"name": name})}
+
+    surviving = [choice("kept")]
+    assert reconcile_tool_choice_after_tool_filtering(choice("missing"), surviving) == "auto"
+    assert reconcile_tool_choice_after_tool_filtering(choice("kept"), surviving) == choice("kept")
+    assert reconcile_tool_choice_after_tool_filtering(choice("missing"), None) is None
+    assert reconcile_tool_choice_after_tool_filtering("none", surviving) == "none"
+
+
+@pytest.mark.parametrize("native_responses", [False, True])
+@pytest.mark.parametrize("legacy_filter", [False, True])
+@pytest.mark.parametrize("case", ["empty", "removed", "kept", "additional", "empty_additional", "disabled"])
+def test_tool_filtering_outbound_request(native_responses, legacy_filter, case):
+    import http.server
+    import threading
+
+    captured = []
+
+    class Capture(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            captured.append(body)
+            response = (
+                {
+                    "id": "resp_test",
+                    "object": "response",
+                    "created_at": 1,
+                    "status": "completed",
+                    "model": "gpt-4o",
+                    "output": [],
+                    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                }
+                if native_responses
+                else {
+                    "id": "chatcmpl_test",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "gpt-4o",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                }
+            )
+            data = json.dumps(response).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *args):
+            pass
+
+    tool = {
+        "type": "function",
+        **(
+            {"name": "kept", "parameters": {"type": "object", "properties": {}}}
+            if native_responses
+            else {"function": {"name": "kept", "parameters": {"type": "object", "properties": {}}}}
+        ),
+    }
+    choice = {"type": "function", **({"name": "kept"} if native_responses else {"function": {"name": "kept"}})}
+    if case == "removed":
+        choice = {
+            "type": "function",
+            **({"name": "missing"} if native_responses else {"function": {"name": "missing"}}),
+        }
+    params = {
+        "model": "openai/gpt-4o",
+        "api_key": "test-only",
+        "tools": [] if case == "empty" else [tool],
+        "tool_choice": choice,
+    }
+    if case != "disabled":
+        if legacy_filter:
+            params["drop_namespace_tools"] = True
+        else:
+            params["allowed_tool_types"] = ["function"]
+    server = http.server.HTTPServer(("127.0.0.1", 0), Capture)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        params["api_base"] = f"http://127.0.0.1:{server.server_port}/v1"
+        if native_responses:
+            request_input = [{"role": "user", "content": "Hi"}]
+            if case in ("additional", "empty_additional"):
+                request_input.insert(
+                    0,
+                    {"type": "additional_tools", "role": "developer", "tools": [tool] if case == "additional" else []},
+                )
+                params["tools"] = [] if case == "additional" else [tool]
+            litellm.responses(input=request_input, **params)
+        else:
+            litellm.completion(messages=[{"role": "user", "content": "Hi"}], **params)
+        sent = captured[-1]
+        if case == "empty":
+            assert sent.get("tools") is None
+            assert sent.get("tool_choice") is None
+        elif case == "removed":
+            assert sent["tool_choice"] == "auto"
+        else:
+            assert sent["tools"] == [tool]
+            assert sent["tool_choice"] == choice
+        if native_responses:
+            assert all(item.get("type") != "additional_tools" for item in sent["input"])
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()

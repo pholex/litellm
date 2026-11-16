@@ -175,6 +175,7 @@ from litellm.utils import (
     drop_namespace_tools,
     inline_image_urls_in_messages,
     filter_tools_by_allowed_types,
+    reconcile_tool_choice_after_tool_filtering,
     flatten_tool_schema_unions,
     validate_and_fix_thinking_param,
     validate_chat_completion_tool_choice,
@@ -4817,6 +4818,7 @@ def completion(  # type: ignore
     # flag into (a)completion kwargs).
     if kwargs.get("drop_namespace_tools") and tools is not None:
         tools = drop_namespace_tools(tools)
+        tool_choice = reconcile_tool_choice_after_tool_filtering(tool_choice, tools)
     # Per-deployment opt-in (litellm_param inline_image_urls: true): Moonshot/Kimi
     # rejects public image URLs (400 "Invalid request: unsupported image url"),
     # accepting only base64 data URLs. Download http(s) image_url parts with
@@ -4841,6 +4843,7 @@ def completion(  # type: ignore
         tools = filter_tools_by_allowed_types(
             tools=tools, allowed_tool_types=_allowed_tool_types
         )
+        tool_choice = reconcile_tool_choice_after_tool_filtering(tool_choice, tools)
     # flatten_tool_schema_unions: see litellm.utils.flatten_tool_schema_unions
     # (grok-4.7 on Bedrock rejects nested oneOf/anyOf). Idempotent, so the
     # second pass on the /responses->chat bridge path is harmless.

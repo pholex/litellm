@@ -242,6 +242,7 @@ from typing import (
     Optional,
     Tuple,
     Type,
+    TypeVar,
     Union,
     cast,
     get_args,
@@ -7403,7 +7404,7 @@ def drop_namespace_tools(tools: Optional[List[dict]]) -> Optional[List[dict]]:
     sent upstream.
     """
     if not tools:
-        return tools
+        return None
     filtered = [
         t for t in tools
         if not isinstance(t, dict) or t.get("type") in (None, "function")
@@ -7434,7 +7435,7 @@ def filter_tools_by_allowed_types(
     BerriAI#34198 — swap to the upstream version once it lands.
     """
     if not tools:
-        return tools
+        return None
     filtered = [
         t
         for t in tools
@@ -7442,6 +7443,28 @@ def filter_tools_by_allowed_types(
         or (t.get("type") or "function") in allowed_tool_types
     ]
     return filtered or None
+
+
+_ToolChoiceT = TypeVar("_ToolChoiceT")
+
+
+def reconcile_tool_choice_after_tool_filtering(
+    tool_choice: _ToolChoiceT, tools: Optional[Iterable[Mapping[str, object]]]
+) -> Union[_ToolChoiceT, Literal["auto"], None]:
+    if not isinstance(tool_choice, dict):
+        return tool_choice
+    if tools is None:
+        return None
+    function = tool_choice.get("function")
+    name = function.get("name") if isinstance(function, dict) else tool_choice.get("name")
+    if not name:
+        return tool_choice
+    for tool in tools:
+        tool_function = tool.get("function")
+        tool_name = tool_function.get("name") if isinstance(tool_function, dict) else tool.get("name")
+        if name == tool_name:
+            return tool_choice
+    return "auto"
 
 
 _SCHEMA_UNION_KEYS = ("oneOf", "anyOf")
