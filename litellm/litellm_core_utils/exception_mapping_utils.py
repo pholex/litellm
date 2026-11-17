@@ -78,6 +78,7 @@ class ExceptionCheckers:
             return False
         known_exception_substrings = [
             "exceed context limit",
+            "input is too long",
             "this model's maximum context length is",
             "string too long. expected a string with maximum length",
             "model's maximum context limit",

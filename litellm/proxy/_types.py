@@ -3234,11 +3234,12 @@ class ProxyException(Exception):
 
     def to_dict(self) -> dict:
         """Converts the ProxyException instance to a dictionary."""
+        public_code = "context_length_exceeded" if self.openai_code == "context_length_exceeded" else self.code
         error_dict: Dict[str, Optional[Union[str, Dict]]] = {
             "message": self.message,
             "type": self.type,
             "param": self.param,
-            "code": self.code,
+            "code": public_code,
         }
         if self.provider_specific_fields:
             error_dict["provider_specific_fields"] = self.provider_specific_fields

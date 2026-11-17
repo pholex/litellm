@@ -5276,3 +5276,247 @@ class TestRouterRequestTimeoutPropagation:
             )
             == 60
         )
+
+
+@pytest.mark.parametrize("status_code", [400, 401, 403, 404, 409, 413, 422])
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.asyncio
+async def test_transient_only_fallback_returns_client_errors(status_code: int, wrapped: bool):
+    error = litellm.APIError(
+        status_code=status_code, message="Input is too long", model="primary", llm_provider="openai"
+    )
+    failure = (
+        MidStreamFallbackError(
+            message="stream failed", model="primary", llm_provider="openai", original_exception=error
+        )
+        if wrapped
+        else error
+    )
+    router = litellm.Router(fallback_on_transient_errors_only=True, enable_weighted_failover=True)
+    fallback = AsyncMock()
+    with patch("litellm.router.run_async_fallback", fallback), pytest.raises(type(failure)) as exc:
+        await router.async_function_with_fallbacks_common_utils(
+            e=failure,
+            disable_fallbacks=False,
+            fallbacks=[{"primary": ["backup"]}],
+            context_window_fallbacks=[{"primary": ["backup"]}],
+            content_policy_fallbacks=[{"primary": ["backup"]}],
+            model_group="primary",
+            args=(),
+            kwargs={"model": "primary"},
+        )
+    assert exc.value is failure
+    fallback.assert_not_awaited()
+
+
+@pytest.mark.parametrize("status_code", [408, 429, 500, 502, 503, 504, 599])
+@pytest.mark.asyncio
+async def test_transient_only_fallback_preserves_transient_recovery(status_code: int):
+    error = litellm.APIError(
+        status_code=status_code, message="temporarily unavailable", model="primary", llm_provider="openai"
+    )
+    router = litellm.Router(fallback_on_transient_errors_only=True)
+    fallback = AsyncMock(return_value="recovered")
+    with patch("litellm.router.run_async_fallback", fallback):
+        result = await router.async_function_with_fallbacks_common_utils(
+            e=error,
+            disable_fallbacks=False,
+            fallbacks=[{"primary": ["backup"]}],
+            context_window_fallbacks=None,
+            content_policy_fallbacks=None,
+            model_group="primary",
+            args=(),
+            kwargs={"model": "primary"},
+        )
+    assert result == "recovered"
+    fallback.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        litellm.APIConnectionError(message="connection failed", model="primary", llm_provider="openai"),
+        litellm.Timeout(message="timed out", model="primary", llm_provider="openai"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_transient_only_fallback_preserves_transport_recovery(error: Exception):
+    router = litellm.Router(fallback_on_transient_errors_only=True)
+    fallback = AsyncMock(return_value="recovered")
+    with patch("litellm.router.run_async_fallback", fallback):
+        result = await router.async_function_with_fallbacks_common_utils(
+            e=error,
+            disable_fallbacks=False,
+            fallbacks=[{"primary": ["backup"]}],
+            context_window_fallbacks=None,
+            content_policy_fallbacks=None,
+            model_group="primary",
+            args=(),
+            kwargs={"model": "primary"},
+        )
+    assert result == "recovered"
+    fallback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_transient_only_input_error_bypasses_explicit_retry_policy():
+    error = litellm.BadRequestError(message="Input is too long", model="primary", llm_provider="openai")
+    call = AsyncMock(side_effect=error)
+    router = litellm.Router(
+        fallback_on_transient_errors_only=True,
+        num_retries=2,
+        retry_policy={"BadRequestErrorRetries": 2},
+        fallbacks=[{"primary": ["backup"]}],
+    )
+    fallback = AsyncMock()
+    with patch("litellm.router.run_async_fallback", fallback), pytest.raises(litellm.BadRequestError) as exc:
+        await router.async_function_with_fallbacks(model="primary", original_function=call)
+    assert exc.value is error
+    call.assert_awaited_once()
+    fallback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_transient_only_unknown_error_does_not_hide_programming_failure():
+    error = ValueError("invalid internal state")
+    call = AsyncMock(side_effect=error)
+    router = litellm.Router(fallback_on_transient_errors_only=True, fallbacks=[{"primary": ["backup"]}])
+    with pytest.raises(ValueError) as exc:
+        await router.async_function_with_fallbacks(model="primary", original_function=call)
+    assert exc.value is error
+    call.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_transient_only_policy_does_not_override_legacy_default():
+    error = litellm.BadRequestError(message="unsupported parameter", model="primary", llm_provider="openai")
+    router = litellm.Router()
+    fallback = AsyncMock(return_value="legacy recovery")
+    with patch("litellm.router.run_async_fallback", fallback):
+        result = await router.async_function_with_fallbacks_common_utils(
+            e=error,
+            disable_fallbacks=False,
+            fallbacks=[{"primary": ["backup"]}],
+            context_window_fallbacks=None,
+            content_policy_fallbacks=None,
+            model_group="primary",
+            args=(),
+            kwargs={"model": "primary"},
+        )
+    assert result == "legacy recovery"
+    fallback.assert_awaited_once()
+
+
+def test_transient_only_setting_round_trips():
+    from litellm.types.router import UpdateRouterConfig
+
+    router = litellm.Router(fallback_on_transient_errors_only=True)
+    assert router.get_settings()["fallback_on_transient_errors_only"] is True
+    settings = UpdateRouterConfig(fallback_on_transient_errors_only=False)
+    router.update_settings(**settings.model_dump(exclude_unset=True))
+    assert router.get_settings()["fallback_on_transient_errors_only"] is False
+
+
+@pytest.mark.parametrize("bridge", [False, True])
+@pytest.mark.asyncio
+async def test_transient_only_responses_stream_surfaces_original_context_error(bridge: bool):
+    error = litellm.ContextWindowExceededError(message="Input is too long.", model="primary", llm_provider="openai")
+    wrapper_error = MidStreamFallbackError(
+        message="stream failed",
+        model="primary",
+        llm_provider="openai",
+        original_exception=error,
+        is_pre_first_chunk=True,
+    )
+    router = litellm.Router(fallback_on_transient_errors_only=True, fallbacks=[{"primary": ["backup"]}])
+    source = _make_responses_iterator(error=wrapper_error, bridge=bridge, model="primary", chat_chunks=[])
+    fallback = AsyncMock()
+    with patch("litellm.router.run_async_fallback", fallback):
+        wrapped = await router._aresponses_streaming_iterator(
+            response=source,
+            initial_kwargs={"model": "primary", "stream": True, "input": "Hello"},
+        )
+        with pytest.raises(litellm.ContextWindowExceededError) as exc:
+            async for _ in wrapped:
+                pass
+    assert exc.value is error
+    assert exc.value.code == "context_length_exceeded"
+    fallback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_transient_only_stops_retrying_when_failure_becomes_permanent():
+    rate_limit = litellm.RateLimitError(message="rate limit", model="primary", llm_provider="openai")
+    context_error = litellm.ContextWindowExceededError(
+        message="Input is too long.", model="primary", llm_provider="openai"
+    )
+    call = AsyncMock(side_effect=[rate_limit, context_error, "must not be called"])
+    router = litellm.Router(
+        model_list=[{"model_name": "primary", "litellm_params": {"model": "openai/primary", "api_key": "test"}}],
+        num_retries=2,
+        retry_after=0,
+        fallback_on_transient_errors_only=True,
+        retry_policy={"RateLimitErrorRetries": 2},
+    )
+    with pytest.raises(litellm.ContextWindowExceededError) as exc:
+        await router.async_function_with_retries(model="primary", original_function=call, metadata={})
+    assert exc.value is context_error
+    assert call.await_count == 2
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        litellm.types.router.RouterRateLimitErrorBasic(model="primary"),
+        litellm.types.router.RouterRateLimitError(
+            model="primary", cooldown_time=1, enable_pre_call_checks=False, cooldown_list=[]
+        ),
+    ],
+)
+def test_transient_only_allows_temporary_deployment_unavailability(error: Exception):
+    assert litellm.Router._is_transient_fallback_error(error)
+
+
+@pytest.mark.asyncio
+async def test_transient_only_stops_entire_fallback_chain_on_context_error():
+    rate_limit = litellm.RateLimitError(message="rate limit", model="primary", llm_provider="openai")
+    context_error = litellm.ContextWindowExceededError(
+        message="Input is too long.", model="backup-one", llm_provider="openai"
+    )
+    call = AsyncMock(side_effect=[rate_limit, context_error, "must not be called"])
+    router = litellm.Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": "openai/" + name, "api_key": "test"}}
+            for name in ("primary", "backup-one", "backup-two")
+        ],
+        num_retries=0,
+        fallback_on_transient_errors_only=True,
+        fallbacks=[{"primary": ["backup-one", "backup-two"]}],
+    )
+    with pytest.raises(litellm.ContextWindowExceededError) as exc:
+        await router.async_function_with_fallbacks(model="primary", original_function=call, metadata={})
+    assert exc.value is context_error
+    assert [c.kwargs["model"] for c in call.await_args_list] == ["primary", "backup-one"]
+
+
+@pytest.mark.asyncio
+async def test_transient_only_weighted_failover_preserves_permanent_error():
+    initial_error = litellm.InternalServerError(message="unavailable", model="primary", llm_provider="openai")
+    initial_error.failed_deployment_id = "one"
+    context_error = litellm.ContextWindowExceededError(
+        message="Input is too long.", model="primary", llm_provider="openai"
+    )
+    router = litellm.Router(fallback_on_transient_errors_only=True, enable_weighted_failover=True)
+    with (
+        patch("litellm.router.run_async_fallback", AsyncMock(side_effect=context_error)),
+        pytest.raises(litellm.ContextWindowExceededError) as exc,
+    ):
+        await router._maybe_run_weighted_failover(
+            exception=initial_error,
+            original_model_group="primary",
+            all_deployments=[{"model_info": {"id": "one"}}, {"model_info": {"id": "two"}}],
+            args=(),
+            kwargs={"metadata": {}},
+            input_kwargs={},
+        )
+    assert exc.value is context_error

@@ -116,6 +116,7 @@ class UpdateRouterConfig(BaseModel):
     retry_after: Optional[float] = None
     fallbacks: Optional[List[dict]] = None
     context_window_fallbacks: Optional[List[dict]] = None
+    fallback_on_transient_errors_only: Optional[bool] = None
     model_group_alias: Optional[Dict[str, Union[str, Dict]]] = {}
 
     model_config = ConfigDict(protected_namespaces=())

@@ -313,6 +313,7 @@ class Router:
         health_check_staleness_threshold: Optional[int] = None,
         health_check_ignore_transient_errors: bool = False,
         enable_weighted_failover: bool = False,
+        fallback_on_transient_errors_only: bool = False,
     ) -> None:
         """
         Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -348,6 +349,7 @@ class Router:
             provider_budget_config (ProviderBudgetConfig): Provider budget configuration. Use this to set llm_provider budget limits. example $100/day to OpenAI, $100/day to Azure, etc. Defaults to None.
             deployment_affinity_ttl_seconds (int): TTL for user-key -> deployment affinity mapping. Defaults to 3600.
             ignore_invalid_deployments (bool): Ignores invalid deployments, and continues with other deployments. Default is to raise an error.
+            fallback_on_transient_errors_only (bool): When True, retries and fallbacks only handle HTTP 408, 429, 5xx, connection failures, and temporary deployment unavailability. Input, authentication, permission, and unknown errors are returned to the caller. Applies before order-based, weighted, context-window, content-policy, and streaming fallback selection. Defaults to False.
             enable_weighted_failover (bool): When True and the routing strategy is "simple-shuffle", a retryable failure on one deployment causes the request to re-pick (weighted) across the other deployments in the same model group before any cross-group fallback runs. Bounded by `max_fallbacks`. Async-only: currently honored by `router.acompletion()` and other async entrypoints. The sync `router.completion()` path falls back to the regular fallback flow. Defaults to False.
         Returns:
             Router: An instance of the litellm.Router class.
@@ -506,6 +508,7 @@ class Router:
         self.disable_cooldowns = disable_cooldowns
         self.enable_health_check_routing = enable_health_check_routing
         self.enable_weighted_failover = enable_weighted_failover
+        self.fallback_on_transient_errors_only = fallback_on_transient_errors_only
         self.health_check_ignore_transient_errors = health_check_ignore_transient_errors
         _staleness = health_check_staleness_threshold or (
             DEFAULT_HEALTH_CHECK_INTERVAL * DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER
@@ -5929,7 +5932,9 @@ class Router:
         }
         try:
             return await run_async_fallback(*args, **failover_kwargs)
-        except (openai.APIError, RouterRateLimitError, RouterRateLimitErrorBasic):
+        except (openai.APIError, RouterRateLimitError, RouterRateLimitErrorBasic) as e:
+            if self.fallback_on_transient_errors_only and not self._is_transient_fallback_error(e):
+                raise
             # Expected model-level failure on the retried deployment. All
             # litellm provider errors derive from openai.APIError; if every
             # remaining deployment in the group is in cooldown the router
@@ -5938,6 +5943,17 @@ class Router:
             # errors (AttributeError, KeyError, TypeError, etc.) intentionally
             # propagate so they remain visible.
             return None
+
+    @staticmethod
+    def _is_transient_fallback_error(error: Exception) -> bool:
+        from litellm.exceptions import MidStreamFallbackError
+
+        if isinstance(error, MidStreamFallbackError) and error.original_exception is not None:
+            return Router._is_transient_fallback_error(error.original_exception)
+        if isinstance(error, (openai.APIConnectionError, RouterRateLimitError, RouterRateLimitErrorBasic)):
+            return True
+        status_code = getattr(error, "status_code", None)
+        return isinstance(status_code, int) and (status_code in (408, 429) or 500 <= status_code <= 599)
 
     async def async_function_with_fallbacks_common_utils(
         self,
@@ -5961,6 +5977,9 @@ class Router:
         fallback_failure_exception_str = ""
 
         if disable_fallbacks is True or original_model_group is None:
+            raise e
+
+        if self.fallback_on_transient_errors_only and not self._is_transient_fallback_error(e):
             raise e
 
         input_kwargs = {
@@ -6169,6 +6188,8 @@ class Router:
 
                 return response
         except Exception as new_exception:
+            if self.fallback_on_transient_errors_only and not self._is_transient_fallback_error(new_exception):
+                raise
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             verbose_router_logger.error(
                 "litellm.router.py::async_function_with_fallbacks() - Error occurred while trying to do fallbacks - {}\n{}\n\nDebug Information:\nCooldown Deployments={}".format(
@@ -6327,6 +6348,8 @@ class Router:
             response = add_retry_headers_to_response(response=response, attempted_retries=0, max_retries=None)
             return response
         except Exception as e:
+            if self.fallback_on_transient_errors_only and not self._is_transient_fallback_error(e):
+                raise
             current_attempt = None
             original_exception = e
             deployment_num_retries = getattr(e, "num_retries", None)
@@ -6413,6 +6436,8 @@ class Router:
                     return response
 
                 except Exception as e:
+                    if self.fallback_on_transient_errors_only and not self._is_transient_fallback_error(e):
+                        raise
                     # Always track the latest error so we raise the most
                     # recent exception instead of the first one.
                     original_exception = e
@@ -9592,6 +9617,7 @@ class Router:
             "retry_policy",
             "model_group_alias",
             "enable_weighted_failover",
+            "fallback_on_transient_errors_only",
         ]
 
         for var in vars_to_include:
@@ -9628,6 +9654,7 @@ class Router:
             "model_group_retry_policy",
             "model_group_alias",
             "enable_weighted_failover",
+            "fallback_on_transient_errors_only",
         ]
 
         _int_settings = [

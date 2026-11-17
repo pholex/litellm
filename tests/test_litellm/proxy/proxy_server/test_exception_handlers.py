@@ -220,3 +220,17 @@ async def test_otel_unhandled_exception_handler_reraises_http_exception_invalid(
         await otel_unhandled_exception_handler(
             request=request, exc=HTTPException(status_code=418, detail="teapot")
         )
+
+
+@pytest.mark.asyncio
+async def test_context_window_error_preserves_public_error_code():
+    exc = ProxyException(
+        message="Input is too long.",
+        type="invalid_request_error",
+        param=None,
+        code=400,
+        openai_code="context_length_exceeded",
+    )
+    response = await openai_exception_handler(request=_make_request(), exc=exc)
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"]["code"] == "context_length_exceeded"

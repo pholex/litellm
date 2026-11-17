@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 
@@ -626,3 +627,19 @@ def test_replicate_422_maps_to_unprocessable_entity():
         )
 
     assert excinfo.value.llm_provider == "replicate"
+
+
+@pytest.mark.parametrize("message", ["Input is too long.", "input is too long.", "INPUT IS TOO LONG."])
+def test_openai_validation_error_for_long_input_is_context_window_error(message: str):
+    upstream_error = OpenAIError(
+        status_code=400,
+        message=json.dumps(
+            {"error": {"message": message, "type": "invalid_request_error", "param": None, "code": "validation_error"}}
+        ),
+        headers={},
+    )
+    with pytest.raises(litellm.ContextWindowExceededError) as exc:
+        exception_type(model="gpt-6.1-sol", original_exception=upstream_error, custom_llm_provider="openai")
+    assert exc.value.status_code == 400
+    assert exc.value.code == "context_length_exceeded"
+    assert message in str(exc.value)

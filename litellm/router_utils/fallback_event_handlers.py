@@ -154,6 +154,10 @@ async def run_async_fallback(
             )
             return response
         except Exception as e:
+            if getattr(
+                litellm_router, "fallback_on_transient_errors_only", False
+            ) and not litellm_router._is_transient_fallback_error(e):
+                raise
             error_from_fallbacks = e
             fallback_errors = fallback_errors + (get_fallback_error_info(e),)
             await log_failure_fallback_event(
