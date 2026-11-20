@@ -7,6 +7,8 @@ from typing import Final
 import pytest
 
 from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
+    flatten_nested_schema_unions,
+    flatten_tool_schema_unions,
     schema_grammar_branch_count,
     schema_has_open_object,
     schema_has_unresolvable_ref,
@@ -15,6 +17,39 @@ from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
 
 _ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
 _ARTIFACT_DATA_ID_PATTERN: Final = r"^(?!\.\.?(?:\/|$))[A-Za-z0-9_\-.~:@+]{1,200}$"
+
+def test_flattens_referenced_nested_unions_inside_namespace_tools() -> None:
+    schema = {
+        "type": "object",
+        "oneOf": [{"$ref": "#/$defs/choices"}],
+        "$defs": {"choices": {"oneOf": [{"required": ["name"]}, {"required": ["id"]}]}},
+    }
+    original = [{"type": "namespace", "tools": [{"type": "function", "parameters": schema}]}]
+
+    flattened = flatten_tool_schema_unions(original)
+
+    assert flattened == [{
+        "type": "namespace",
+        "tools": [{"type": "function", "parameters": {
+            "type": "object", "oneOf": [{"required": ["name"]}, {"required": ["id"]}]
+        }}],
+    }]
+    assert flatten_tool_schema_unions(flattened) == flattened
+    assert original[0]["tools"][0]["parameters"] == schema
+    assert schema["oneOf"] == [{"$ref": "#/$defs/choices"}]
+
+
+def test_recursive_tool_schema_keeps_its_definition() -> None:
+    schema = {
+        "$ref": "#/$defs/node",
+        "$defs": {"node": {"type": "object", "properties": {"child": {"$ref": "#/$defs/node"}}}},
+    }
+
+    result = flatten_nested_schema_unions(schema)
+
+    assert result["properties"] == {"child": {"$ref": "#/$defs/node"}}
+    assert result["$defs"] == schema["$defs"]
+
 
 class TestFlattenTopLevelSchemaCombinators:
     def _customer_anyof_schema(self):

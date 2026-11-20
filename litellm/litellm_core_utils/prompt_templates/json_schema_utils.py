@@ -1,9 +1,9 @@
 import re
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from graphlib import CycleError, TopologicalSorter
 from itertools import chain, islice
 from types import MappingProxyType
-from typing import Final
+from typing import Final, TypeVar, cast
 
 from pydantic import TypeAdapter
 
@@ -161,6 +161,104 @@ def flatten_top_level_schema_combinators(schema: Mapping[str, object]) -> Mappin
     unchanged and the input is never mutated.
     """
     return _flatten_schema_against_root(schema, schema, frozenset(), 0, {})
+
+
+_UNION_SCHEMA_KEYS: Final = ("oneOf", "anyOf")
+_SCHEMA_DEFINITION_KEYS: Final = frozenset(("$defs", "definitions"))
+_TOOL = TypeVar("_TOOL")
+
+
+class _UnionExpansionLimit(Exception):
+    pass
+
+
+def _union_variant_leaves(variant: object, operator: str) -> tuple[object, ...]:
+    if not isinstance(variant, Mapping) or set(variant) - {"title", "description"} != {operator}:
+        return (variant,)
+    return _schema_branches(variant, operator) or (variant,)
+
+
+def flatten_nested_schema_unions(schema: Mapping[str, object]) -> Mapping[str, object]:
+    """Inline local definitions and remove redundant nesting of a union operator."""
+    remaining: Final = iter(range(8192))
+    has_unresolved_ref = False
+
+    def transform(node: object, stack: frozenset[str], depth: int) -> object:
+        nonlocal has_unresolved_ref
+        if depth > _MAX_SCHEMA_FLATTEN_DEPTH or next(remaining, None) is None:
+            raise _UnionExpansionLimit
+        if isinstance(node, list):
+            return [transform(child, stack, depth + 1) for child in node]
+        if not isinstance(node, Mapping):
+            return node
+        reference: Final = node.get("$ref")
+        if isinstance(reference, str):
+            target: Final = _resolve_local_schema_ref(schema, reference)
+            if target is not None and reference not in stack:
+                return transform(
+                    {
+                        **target,
+                        **{
+                            key: value
+                            for key, value in node.items()
+                            if key != "$ref" and (node is not schema or key not in _SCHEMA_DEFINITION_KEYS)
+                        },
+                    },
+                    stack | {reference},
+                    depth + 1,
+                )
+            has_unresolved_ref = True
+        rewritten: Final = {
+            key: transform(value, stack, depth + 1)
+            for key, value in node.items()
+            if node is not schema or key not in _SCHEMA_DEFINITION_KEYS
+        }
+        merged: Final = {
+            operator: list(
+                chain.from_iterable(_union_variant_leaves(variant, operator) for variant in variants)
+            )
+            for operator in _UNION_SCHEMA_KEYS
+            if isinstance(variants := rewritten.get(operator), list)
+        }
+        return {**rewritten, **merged}
+
+    try:
+        flattened: Final = transform(schema, frozenset(), 0)
+    except _UnionExpansionLimit:
+        return schema
+    if not isinstance(flattened, Mapping):
+        return schema
+    return {
+        **flattened,
+        **{key: schema[key] for key in _SCHEMA_DEFINITION_KEYS if has_unresolved_ref and key in schema},
+    }
+
+
+def _with_flattened_parameters(tool: Mapping[str, object]) -> Mapping[str, object]:
+    parameters: Final = tool.get("parameters")
+    return {**tool, "parameters": flatten_nested_schema_unions(parameters)} if isinstance(parameters, Mapping) else tool
+
+
+def _tool_with_flattened_unions(tool: object) -> object:
+    if not isinstance(tool, Mapping):
+        return tool
+    result: Final = _with_flattened_parameters(tool)
+    function: Final = tool.get("function")
+    if isinstance(function, Mapping):
+        return {**result, "function": _with_flattened_parameters(function)}
+    members: Final = tool.get("tools")
+    if tool.get("type") == "namespace" and isinstance(members, list):
+        return {**result, "tools": [_tool_with_flattened_unions(member) for member in members]}
+    return result
+
+
+def flatten_tool_schema_unions(tools: Iterable[_TOOL] | None) -> list[_TOOL] | None:
+    if tools is None:
+        return None
+    return [
+        cast(_TOOL, _tool_with_flattened_unions(tool))  # cast-ok: only the parameter schema of the tool changes
+        for tool in tools
+    ]
 
 
 _SUBSCHEMA_KEYWORDS: Final = frozenset(

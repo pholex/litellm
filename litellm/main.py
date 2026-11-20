@@ -141,6 +141,7 @@ from litellm.llms.base_llm.base_model_iterator import (
 )
 from litellm.llms.base_llm.chat.transformation import with_attribution_headers
 from litellm.litellm_core_utils.prompt_templates.image_handling import inline_remote_image_urls, inline_remote_media
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import flatten_tool_schema_unions
 from litellm.litellm_core_utils.reasoning_effort_utils import configured_reasoning_effort
 from litellm.llms.bedrock.common_utils import (
     BedrockModelInfo,
@@ -5621,6 +5622,8 @@ def completion(
     allowed_tool_types: Final = configured_tool_types(kwargs)
     if allowed_tool_types is not None:
         tools, tool_choice = filter_request_tools(tools, tool_choice, allowed_tool_types)
+    if kwargs.pop("flatten_tool_schema_unions", False) is True:
+        tools = flatten_tool_schema_unions(tools)
     # validate tool_choice
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice, model=model)
     # validate optional params

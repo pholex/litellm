@@ -30,6 +30,10 @@
 
 同版恢复 Seedream 的部署级像素分档、图层逐张计费和输入图免费额度。379 项计费及响应类型测试通过。真实 SSE 客户端和媒体账单仍需在隔离环境复验。
 
+## 部署级兼容开关
+
+`1.110.1+tokenweave.20261120.5` 恢复 `reasoning_effort_map`、`reasoning_summary_override`、`inline_image_urls` 和 `flatten_tool_schema_unions`。沿用新版图片下载保护，工具 schema 转换支持引用、命名空间和递归限制。原生及桥接 Responses 的推理和工具 schema 用例以及图片 URL 用例通过。Grok 和图片上游仍需实测。
+
 ## 逐提交记录
 
 | 原提交 | 功能 | 三方试合 | 候选处理 |
@@ -51,7 +55,7 @@
 | `d7e8f3deb5` | feat(responses): reasoning_summary_override litellm_param for strict Bedrock models | 冲突 | 旧配置摘要覆盖已迁移。原生 Responses 和转 Chat 都覆盖替换、删除及未请求摘要三类行为。 |
 | `709ea79515` | feat(responses): drop_foreign_reasoning_items litellm_param + affinity check routes normally on model-group switch | 冲突 | 生产配置启用的 affinity 跨组切换已由新版处理，保留摘要并剥离不可解密内容。覆盖了同一加密边界和切换到其他组的单测。无 affinity 的直接调用待验证。 |
 | `590232b0bf` | fix(openai): route GPT-6 and Bedrock-named GPT-5.x through the GPT-5 reasoning config | 冲突 | 新版 OpenAI 模型配置已重构。待验证 GPT-6 和 Bedrock 模型名的配置选择。 |
-| `62905ea0fd` | feat(responses): flatten_tool_schema_unions litellm_param for grok-4.7 on Bedrock | 冲突 | 同名开关未见于新版。待移植 Grok 的 schema union 兼容及回归。 |
+| `62905ea0fd` | feat(responses): flatten_tool_schema_unions litellm_param for grok-4.7 on Bedrock | 冲突 | 已恢复部署级开关，覆盖命名空间、hoisted tools、引用和有界递归。Grok 上游待实测。 |
 | `bcabe1492a` | fix(images): Codex built-in image_gen compatibility (background passthrough + JSON /images/edits) | 冲突 | 待核对 Codex JSON 图片编辑入口和 background 字段。 |
 | `005cba9174` | fix(cost): honor deployment per-image pricing for non-gpt-image models on the openai provider | 冲突 | 待核对 OpenAI 兼容图片模型的部署级单价。 |
 | `ef6a1bf96a` | fix(responses): strip response-only logprobs from output_text parts in input history | 冲突 | 已移植到 `70463d54d8`，在同步 Responses 核心入口清理 replay 的 logprobs。 |

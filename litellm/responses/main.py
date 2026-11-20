@@ -49,6 +49,7 @@ from litellm.litellm_core_utils.reasoning_effort_capability import (
     resolve_deployment_reasoning_effort,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import apply_configured_reasoning
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import flatten_tool_schema_unions
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.common_utils import get_openai_credentials
@@ -1611,6 +1612,9 @@ def responses(
             local_vars.update(input=input, tools=tools, tool_choice=tool_choice)
             kwargs.pop("allowed_tool_types", None)
             kwargs.pop("drop_namespace_tools", None)
+        if kwargs.pop("flatten_tool_schema_unions", False) is True:
+            tools = flatten_tool_schema_unions(tools)
+            local_vars["tools"] = tools
         litellm_logging_obj.record_agentic_loop_params(AgenticLoopParams(model=model))
 
         from litellm.litellm_core_utils.core_helpers import attribute_or_none

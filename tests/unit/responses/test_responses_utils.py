@@ -896,6 +896,32 @@ def test_responses_applies_configured_reasoning_once(
     assert "reasoning_summary_override" not in sent
 
 
+def test_responses_flattens_only_opted_in_hoisted_tool_schemas() -> None:
+    responses_module = import_module("litellm.responses.main")
+    tool = {
+        "type": "function",
+        "name": "schedule",
+        "parameters": {
+            "type": "object",
+            "oneOf": [{"oneOf": [{"required": ["date"]}, {"required": ["time"]}]}],
+        },
+    }
+    with patch.object(responses_module.base_llm_http_handler, "response_api_handler") as upstream:
+        litellm.responses(
+            model="openai/gpt-5.4-nano",
+            input=[{"type": "additional_tools", "tools": [tool]}],
+            api_key="test-key",
+            allowed_tool_types=["function"],
+            flatten_tool_schema_unions=True,
+        )
+
+    sent = upstream.call_args.kwargs
+    forwarded = sent["response_api_optional_request_params"]["tools"][0]
+    assert forwarded["parameters"]["oneOf"] == [{"required": ["date"]}, {"required": ["time"]}]
+    assert "flatten_tool_schema_unions" not in sent
+    assert tool["parameters"]["oneOf"][0].get("oneOf") is not None
+
+
 def test_responses_maps_reasoning_effort_from_litellm_params_to_reasoning():
     """
     Test that when reasoning_effort is passed in kwargs (e.g. from proxy litellm_params)
