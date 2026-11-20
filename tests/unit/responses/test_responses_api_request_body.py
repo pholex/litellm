@@ -1543,3 +1543,41 @@ async def test_router_responses_deployment_pricing_keeps_inherited_cache_rates(
         uncached_input * rates["input_cost_per_token"] + response.usage.output_tokens * rates["output_cost_per_token"]
     )
     assert floor < _response_cost(response) < full_price
+
+
+@pytest.mark.asyncio
+async def test_router_uses_deployment_tool_allowlist_on_native_responses(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "filtered-responses",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-nano",
+                    "api_base": "https://tokenweave-tool-filter.example.test/v1",
+                    "api_key": "fake-api-key",
+                    "allowed_tool_types": ["function"],
+                },
+            }
+        ]
+    )
+    upstream = respx_mock.post("https://tokenweave-tool-filter.example.test/v1/responses").mock(
+        return_value=httpx.Response(
+            200,
+            json=_minimal_responses_api_payload("resp_filtered", "gpt-5.4-nano"),
+        )
+    )
+
+    await router.aresponses(
+        model="filtered-responses",
+        input="hello",
+        tools=[{"type": "custom", "name": "filtered_tool"}],
+        tool_choice={"type": "custom", "name": "filtered_tool"},
+    )
+
+    sent = json.loads(upstream.calls.last.request.content)
+    assert "tools" not in sent
+    assert "tool_choice" not in sent
+    assert "allowed_tool_types" not in sent

@@ -12,6 +12,12 @@
 
 这些测试没有调用线上模型或数据库。现有 ECS 配置显式使用 `allowed_tool_types`、`drop_foreign_reasoning_items` 与 `fallback_on_transient_errors_only`，还需逐项确认新路由的实际生效条件。首个隔离测试构建使用 `1.110.1+tokenweave.20261120.1`。该版本用于建立镜像及数据库启动基线，功能迁移进度见下表。
 
+## 工具过滤迁移
+
+`1.110.1+tokenweave.20261120.2` 恢复部署级 `allowed_tool_types`、旧版 `drop_namespace_tools` 以及过滤后的具名工具选择校正。Responses 路径先用新版上游的 hoist 逻辑展开 `additional_tools`。启用 `bridge_custom_tools_as_functions` 的 Responses 转 Chat 路由会保留允许转换的 custom 工具，由上游的转换器处理。
+
+验证覆盖原生 Responses、Responses 转 Chat、Rust 路由转发部署配置、Bedrock Chat 转换和空工具列表。GPT-6.2 的额外工具类型、真实 SSE 和多轮回传仍需在隔离环境验收。
+
 ## 逐提交记录
 
 | 原提交 | 功能 | 三方试合 | 候选处理 |

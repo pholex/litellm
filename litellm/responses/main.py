@@ -52,6 +52,7 @@ from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfi
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.common_utils import get_openai_credentials
 from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
+from litellm.responses.additional_tools import hoist_additional_tools
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     with_compaction_items_as_summaries,
 )
@@ -102,6 +103,8 @@ from litellm.types.utils import (
 from litellm.utils import (
     ProviderConfigManager,
     client,
+    configured_tool_types,
+    filter_request_tools,
 )
 
 if TYPE_CHECKING:
@@ -1582,6 +1585,31 @@ def responses(
         )
         input = strip_input_logprobs(input)  # rebind-ok: sanitize replayed input after prompt management
         local_vars["input"] = input
+        allowed_tool_types: Final = configured_tool_types(kwargs)
+        bridge_custom_tools: Final = kwargs.pop("bridge_custom_tools_as_functions", False) is True
+        if allowed_tool_types is not None:
+            hoisted: Final = hoist_additional_tools(
+                input,
+                tuple(tools or ()),
+                drop_params=litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True,
+            )
+            input = hoisted.input  # rebind-ok: provider receives hoisted tool history
+            preserve_custom_tools: Final = (
+                bridge_custom_tools
+                and "function" in allowed_tool_types
+                and _will_bridge_to_chat_completions(
+                    model,
+                    custom_llm_provider,
+                    use_chat_completions_api,
+                    deployment_model_info,
+                    _api_base_kwarg(kwargs),
+                )
+            )
+            effective_types: Final = (*allowed_tool_types, "custom") if preserve_custom_tools else allowed_tool_types
+            tools, tool_choice = filter_request_tools(hoisted.tools, tool_choice, effective_types)
+            local_vars.update(input=input, tools=tools, tool_choice=tool_choice)
+            kwargs.pop("allowed_tool_types", None)
+            kwargs.pop("drop_namespace_tools", None)
         litellm_logging_obj.record_agentic_loop_params(AgenticLoopParams(model=model))
 
         from litellm.litellm_core_utils.core_helpers import attribute_or_none

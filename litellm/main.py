@@ -193,9 +193,11 @@ from litellm.utils import (
     Usage,
     add_provider_specific_params_to_optional_params,
     async_mock_completion_streaming_obj,
+    configured_tool_types,
     convert_to_model_response_object,
     create_pretrained_tokenizer,
     create_tokenizer,
+    filter_request_tools,
     get_llm_provider,
     get_model_info,
     get_non_default_completion_params,
@@ -5611,6 +5613,9 @@ def completion(
     # validate messages
     messages = validate_and_fix_openai_messages(messages=messages)
     tools = validate_and_fix_openai_tools(tools=tools)
+    allowed_tool_types: Final = configured_tool_types(kwargs)
+    if allowed_tool_types is not None:
+        tools, tool_choice = filter_request_tools(tools, tool_choice, allowed_tool_types)
     # validate tool_choice
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice, model=model)
     # validate optional params

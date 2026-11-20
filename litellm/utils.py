@@ -9652,6 +9652,42 @@ def validate_and_fix_openai_messages(messages: list):
     return validate_chat_completion_user_messages(messages=new_messages)
 
 
+_RequestTool = TypeVar("_RequestTool")
+_RequestToolChoice = TypeVar("_RequestToolChoice")
+
+
+def configured_tool_types(params: Mapping[str, object]) -> tuple[str, ...] | None:
+    allowed = params.get("allowed_tool_types")
+    if isinstance(allowed, (list, tuple)) and all(isinstance(tool_type, str) for tool_type in allowed):
+        return tuple(allowed)
+    return ("function",) if params.get("drop_namespace_tools") is True else None
+
+
+def _request_tool_name(tool: Mapping[str, object]) -> object:
+    function = tool.get("function")
+    return function.get("name") if isinstance(function, Mapping) else tool.get("name")
+
+
+def filter_request_tools(
+    tools: Iterable[_RequestTool] | None,
+    tool_choice: _RequestToolChoice,
+    allowed: Collection[str],
+) -> tuple[list[_RequestTool] | None, _RequestToolChoice | Literal["auto"] | None]:
+    filtered = [
+        tool
+        for tool in tools or ()
+        if not isinstance(tool, Mapping) or (tool.get("type") or "function") in allowed
+    ]
+    if not isinstance(tool_choice, Mapping):
+        return filtered or None, tool_choice
+    if not filtered:
+        return None, None
+    name = _request_tool_name(tool_choice)
+    if not name or any(isinstance(tool, Mapping) and _request_tool_name(tool) == name for tool in filtered):
+        return filtered, tool_choice
+    return filtered, "auto"
+
+
 def validate_and_fix_openai_tools(tools: list | None) -> list[dict] | None:
     """
     Ensure tools is List[dict] and not List[BaseModel]

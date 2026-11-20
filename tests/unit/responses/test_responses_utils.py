@@ -819,6 +819,47 @@ def test_responses_extra_body_forwarded_to_completion_transformation_handler():
         assert call_kwargs.kwargs.get("extra_body") == {"custom_key": "custom_value"}
 
 
+@pytest.mark.parametrize(
+    ("bridge", "bridge_custom"),
+    [(False, False), (True, False), (False, True), (True, True)],
+)
+def test_responses_filters_inline_and_hoisted_tools_for_selected_deployment(
+    bridge: bool, bridge_custom: bool
+) -> None:
+    responses_module = import_module("litellm.responses.main")
+    surviving_tool = {"type": "function", "name": "keep", "parameters": {}, "strict": False}
+    removed_tool = {"type": "custom", "name": "remove"}
+    message = {"type": "message", "role": "user", "content": "Hello"}
+    input_items = [message, {"type": "additional_tools", "tools": [surviving_tool]}]
+    handler = (
+        responses_module.litellm_completion_transformation_handler
+        if bridge else responses_module.base_llm_http_handler
+    )
+
+    with patch.object(handler, "response_api_handler") as upstream:
+        litellm.responses(
+            model="openai/gpt-4o",
+            api_key="test-key",
+            input=input_items,
+            tools=[removed_tool],
+            tool_choice={"type": "custom", "name": "remove"},
+            allowed_tool_types=["function"],
+            bridge_custom_tools_as_functions=bridge_custom,
+            use_chat_completions_api=bridge,
+        )
+
+    sent = upstream.call_args.kwargs
+    request = sent["responses_api_request" if bridge else "response_api_optional_request_params"]
+    assert sent["input"] == [message]
+    if bridge and bridge_custom:
+        assert request["tools"] == [removed_tool, surviving_tool]
+        assert request["tool_choice"] == {"type": "custom", "name": "remove"}
+    else:
+        assert request["tools"] == [surviving_tool]
+        assert request["tool_choice"] == "auto"
+    assert input_items[1]["tools"] == [surviving_tool]
+
+
 def test_responses_maps_reasoning_effort_from_litellm_params_to_reasoning():
     """
     Test that when reasoning_effort is passed in kwargs (e.g. from proxy litellm_params)

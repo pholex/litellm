@@ -633,6 +633,9 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     use_in_pass_through: bool | None = False
     use_litellm_proxy: bool | None = False
     use_chat_completions_api: bool | None = None
+    allowed_tool_types: list[str] | None = None
+    drop_namespace_tools: bool | None = None
+    bridge_custom_tools_as_functions: bool | None = None
     use_xai_oauth: bool | None = Field(
         default=False,
         description="Use stored xAI OAuth credentials when no xAI API key is configured.",

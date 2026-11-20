@@ -8764,6 +8764,20 @@ MODEL: Final = "anthropic/claude-haiku-4-5"
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+def test_configured_chat_tool_filter_reconciles_named_choices():
+    from litellm.utils import configured_tool_types, filter_request_tools
+
+    kept = {"type": "function", "function": {"name": "keep"}}
+    removed = {"type": "local_shell", "name": "remove"}
+    choice = {"type": "function", "function": {"name": "keep"}}
+    allowed = configured_tool_types({"drop_namespace_tools": True})
+    assert allowed == ("function",)
+    assert filter_request_tools([removed, kept], choice, allowed) == ([kept], choice)
+    assert filter_request_tools([removed], choice, allowed) == (None, None)
+    assert filter_request_tools([None, removed], choice, allowed) == ([None], "auto")
+    assert configured_tool_types({"allowed_tool_types": [], "drop_namespace_tools": True}) == ()
+
+
 def test_validate_tool_choice_none():
     """Test that None is returned as-is."""
     result = validate_chat_completion_tool_choice(None, model=MODEL)
