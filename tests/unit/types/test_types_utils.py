@@ -923,6 +923,34 @@ def test_image_response_keeps_background():
     assert response.model_dump()["background"] == "transparent"
 
 
+def test_image_response_keeps_raw_layer_metadata() -> None:
+    response = ImageResponse(
+        data=[
+            {
+                "url": "https://example.com/layer.png",
+                "z_index": 0,
+                "bounding_box": [0, 0, 128, 256],
+                "name": "background",
+                "size": "128x256",
+                "provider_specific_fields": {"name": "base layer"},
+                "optional_extension": None,
+            }
+        ]
+    )
+
+    assert response.model_dump(exclude_none=True)["data"] == [
+        {
+            "url": "https://example.com/layer.png",
+            "provider_specific_fields": {
+                "z_index": 0,
+                "bounding_box": [0, 0, 128, 256],
+                "name": "base layer",
+                "size": "128x256",
+            },
+        }
+    ]
+
+
 def test_image_response_serialization_honors_dump_options():
     response: Final = ImageResponse(
         data=[

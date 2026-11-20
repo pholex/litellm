@@ -2792,8 +2792,10 @@ class ImageObject(OpenAIImage):
         **kwargs,
     ) -> None:
         super().__init__(b64_json=b64_json, url=url, revised_prompt=revised_prompt)
-        if provider_specific_fields:
-            self.provider_specific_fields = provider_specific_fields
+        extensions: Final = {key: value for key, value in kwargs.items() if value is not None}
+        fields: Final = {**extensions, **(provider_specific_fields or {})}
+        if fields:
+            self.provider_specific_fields = fields
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator

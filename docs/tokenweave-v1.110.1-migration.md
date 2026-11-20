@@ -52,9 +52,9 @@
 | `d52b5277fc` | feat(minimax): backport MiniMax-H3 / H3-Max video generation via /v1/videos (upstream #43705) | 冲突 | 上游含正式实现 71e508b65d（#43705）。需跑 H3/H3-Max 的协议和计费回归。 |
 | `e6fca9f478` | feat(volcengine): backport Doubao-Seedance video generation via /v1/videos (upstream #46156) | 冲突 | 上游含正式实现 f81e657903（#46156）。额外的草稿链路单独移植。 |
 | `61a5f8b360` | feat(router): model_info.hide_from_model_list hides a model group from /v1/models | 冲突 | 已移植到 `10f4fed760`。上游 discoverable:false 存在管理员例外。 |
-| `d87c5efce0` | fix(cost): video calls bill at the deployment's own price, not the global cost map | 冲突 | 待验证视频部署价优先级以及轮询是否二次记费。 |
+| `d87c5efce0` | fix(cost): video calls bill at the deployment's own price, not the global cost map | 冲突 | 上游已有部署价优先级和 MiniMax 轮询计费修复。MiniMax 与 Volcengine 共 333 项单测通过，实际账单待验。 |
 | `ba7b44b7be` | feat(cost): pixel-tier per-image pricing and free input images for deployment image pricing | 冲突 | 待适配像素分档图片价格及免费输入图。 |
-| `c261f7f87b` | fix(images): keep provider-specific per-image fields (z_index, bounding_box, name) in ImageObject.provider_specific_fields | 冲突 | 待验证图层索引、名称和边界框能否保留到最终返回。 |
+| `c261f7f87b` | fix(images): keep provider-specific per-image fields (z_index, bounding_box, name) in ImageObject.provider_specific_fields | 冲突 | 补齐 ImageObject 对原始图层元数据的收集，复用新版序列化逻辑。返回结构回归通过。 |
 | `4019b10ad4` | feat(cost): bill layer-decomposition outputs per item at the layer rate | 冲突 | 待验证按输出图层数计费。 |
 | `ef9b77f8f5` | feat(volcengine videos): Seedance 2.5 draft mode, 480p sample then a 1080p final render billed from the draft task | 可直接应用 | 已移植到 957ff16886。使用新版 Seedance 基础实现。 |
 | `41e75c05ef` | fix(volcengine videos): accept litellm's encoded video id in draft_task.id and hand Ark the draft's own id | 冲突 | 在前置草稿提交后成功移植，候选提交 c6560bce19。 |
