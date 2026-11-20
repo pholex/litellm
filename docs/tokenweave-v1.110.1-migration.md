@@ -48,8 +48,8 @@
 | `e905975b37` | feat(mcp): report upstream serverInfo.version on single-server gateway endpoints | 冲突 | MCP 模块已从 _experimental 迁移。核对单服务器 initialize 的 serverInfo.version。 |
 | `ca4abfe5da` | build(docker): pin wolfi python to 3.13 so image builds match requires-python | 冲突 | 新版使用 Wolfi Python 3.13。保留新版 Dockerfile，需后续实打镜像。 |
 | `8ffca595c1` | build(docker): use uv managed CPython instead of the Wolfi apk python | 冲突 | 新版使用基镜像和包管理器提供的 Python 3.13，与旧 uv 下载路径不同。以实际镜像构建判断是否还需要补丁。 |
-| `d7e8f3deb5` | feat(responses): reasoning_summary_override litellm_param for strict Bedrock models | 冲突 | 新版有按 provider 解析摘要的逻辑。待验证旧配置的强制摘要语义和三类请求情形。 |
-| `709ea79515` | feat(responses): drop_foreign_reasoning_items litellm_param + affinity check routes normally on model-group switch | 冲突 | 新版 affinity 已有按部署剥离不可解密推理的路径。待跑跨模型及无 affinity 的切换回归。 |
+| `d7e8f3deb5` | feat(responses): reasoning_summary_override litellm_param for strict Bedrock models | 冲突 | 旧配置摘要覆盖已迁移。原生 Responses 和转 Chat 都覆盖替换、删除及未请求摘要三类行为。 |
+| `709ea79515` | feat(responses): drop_foreign_reasoning_items litellm_param + affinity check routes normally on model-group switch | 冲突 | 生产配置启用的 affinity 跨组切换已由新版处理，保留摘要并剥离不可解密内容。覆盖了同一加密边界和切换到其他组的单测。无 affinity 的直接调用待验证。 |
 | `590232b0bf` | fix(openai): route GPT-6 and Bedrock-named GPT-5.x through the GPT-5 reasoning config | 冲突 | 新版 OpenAI 模型配置已重构。待验证 GPT-6 和 Bedrock 模型名的配置选择。 |
 | `62905ea0fd` | feat(responses): flatten_tool_schema_unions litellm_param for grok-4.7 on Bedrock | 冲突 | 同名开关未见于新版。待移植 Grok 的 schema union 兼容及回归。 |
 | `bcabe1492a` | fix(images): Codex built-in image_gen compatibility (background passthrough + JSON /images/edits) | 冲突 | 待核对 Codex JSON 图片编辑入口和 background 字段。 |
@@ -69,8 +69,8 @@
 | `8130e84bb4` | fix(gemini): map none/minimal to thinkingLevel low on gemini-3.7/3.8-flash | 冲突 | 待验证新版按模型映射 none/minimal。 |
 | `faee459f18` | fix(gemini): map xhigh/max to thinkingLevel high; keep medium on Gemini 4 | 冲突 | 待验证新版按模型映射 xhigh/max，并保留支持 medium 的模型。 |
 | `dbb95ad9bd` | feat(responses bridge): expose Codex custom tools as functions; drop empty assistant replays | 冲突 | 上游有 custom_tools.py 和 SSE 回转。待核对 Bedrock Runtime 与空 assistant 历史的覆盖。 |
-| `7d193f254c` | feat(completion): opt-in inline_image_urls for upstreams that reject image URLs | 冲突 | 待核对旧 inline_image_urls 配置及安全下载边界。 |
-| `2fd65f720d` | feat: per-deployment reasoning_effort_map to rewrite unsupported efforts | 冲突 | 待移植旧 per-deployment effort 映射或配置等价转换。 |
+| `7d193f254c` | feat(completion): opt-in inline_image_urls for upstreams that reject image URLs | 冲突 | 已恢复旧配置开关，复用新版带 SSRF 检查和大小限制的下载器。端到端构造的 Chat 请求只替换远程图像链接。 |
+| `2fd65f720d` | feat: per-deployment reasoning_effort_map to rewrite unsupported efforts | 冲突 | 已恢复旧映射，Responses 转 Chat 路径只映射一次。 |
 | `1786fa921a` | feat(gemini images): pass thinkingConfig through generations and edits | 冲突 | 待验证 Gemini image generations 和 edits 的 thinkingConfig。 |
 | `d788af5105` | fix(image edits): keep output_format / output_compression / moderation | 冲突 | 待验证 edits 的 output_format、output_compression 和 moderation。 |
 | `65c3b9976f` | feat(images): forward markup edits and preserve SVG and GIF formats | 冲突 | 待验证编辑时 markup 的传递，以及 SVG/GIF 格式维持。 |

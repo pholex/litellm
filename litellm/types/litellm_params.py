@@ -167,7 +167,10 @@ class DispatchOptions:
     allowed_openai_params: Sequence[str] | None = None
     allowed_tool_types: Sequence[str] | None = None
     drop_namespace_tools: bool | None = None
+    inline_image_urls: bool | None = None
     bridge_custom_tools_as_functions: bool | None = None
+    reasoning_effort_map: Mapping[str, str] | None = None
+    reasoning_summary_override: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

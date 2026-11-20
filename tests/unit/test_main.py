@@ -553,6 +553,50 @@ def test_completion_strips_eager_input_streaming_before_openai(respx_mock: respx
     assert sent_tool["function"]["name"] == "write_file"
 
 
+@pytest.mark.parametrize("inline", [False, True])
+def test_completion_inlines_only_images_when_opted_in(
+    respx_mock: respx.MockRouter, openai_api_response: dict[str, object], monkeypatch: pytest.MonkeyPatch, inline: bool
+) -> None:
+    from litellm.litellm_core_utils.prompt_templates import image_handling
+
+    source = "https://example.test/image.png"
+    payload = "data:image/png;base64,aW1hZ2U="
+    seen = []
+
+    def fetch(url: str) -> str:
+        seen.append(url)
+        return payload
+
+    monkeypatch.setattr(image_handling, "convert_url_to_base64", fetch)
+    upstream = respx_mock.post("https://tokenweave-images.example.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=openai_api_response)
+    )
+    messages = [{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Describe the image."},
+            {"type": "image_url", "image_url": {"url": source, "detail": "low"}},
+        ],
+    }]
+
+    litellm.completion(
+        model="openai/gpt-4o",
+        messages=messages,
+        api_base="https://tokenweave-images.example.test/v1",
+        api_key="fake-key",
+        inline_image_urls=inline,
+    )
+
+    sent = json.loads(upstream.calls.last.request.content)
+    assert sent["messages"][0]["content"][-1]["image_url"] == {
+        "url": payload if inline else source,
+        "detail": "low",
+    }
+    assert seen == ([source] if inline else [])
+    assert messages[0]["content"][-1]["image_url"]["url"] == source
+    assert "inline_image_urls" not in sent
+
+
 _ALLOWED_TOOLS_TOOL_CHOICE: Final = {
     "type": "allowed_tools",
     "allowed_tools": {"mode": "required", "tools": [{"type": "function", "function": {"name": "get_time"}}]},

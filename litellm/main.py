@@ -140,6 +140,8 @@ from litellm.llms.base_llm.base_model_iterator import (
     convert_model_response_to_streaming,
 )
 from litellm.llms.base_llm.chat.transformation import with_attribution_headers
+from litellm.litellm_core_utils.prompt_templates.image_handling import inline_remote_image_urls, inline_remote_media
+from litellm.litellm_core_utils.reasoning_effort_utils import configured_reasoning_effort
 from litellm.llms.bedrock.common_utils import (
     BedrockModelInfo,
     NativeOutputFallback,
@@ -5613,6 +5615,9 @@ def completion(
     # validate messages
     messages = validate_and_fix_openai_messages(messages=messages)
     tools = validate_and_fix_openai_tools(tools=tools)
+    effort_map: Final = kwargs.pop("reasoning_effort_map", None)
+    if effort_map is not None and isinstance(reasoning_effort, str):
+        reasoning_effort = configured_reasoning_effort(reasoning_effort, effort_map)
     allowed_tool_types: Final = configured_tool_types(kwargs)
     if allowed_tool_types is not None:
         tools, tool_choice = filter_request_tools(tools, tool_choice, allowed_tool_types)
@@ -5775,6 +5780,8 @@ def completion(
         user_continue_message=user_continue_message,
         assistant_continue_message=assistant_continue_message,
     )
+    if kwargs.get("inline_image_urls") is True:
+        messages = inline_remote_media(messages, should_inline=inline_remote_image_urls)
     ######## end of unpacking kwargs ###########
     non_default_params: Final = get_non_default_completion_params(kwargs=kwargs)
     ## PROMPT MANAGEMENT HOOKS ##

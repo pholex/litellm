@@ -48,6 +48,7 @@ from litellm.litellm_core_utils.reasoning_effort_capability import (
     model_group_from_metadata,
     resolve_deployment_reasoning_effort,
 )
+from litellm.litellm_core_utils.reasoning_effort_utils import apply_configured_reasoning
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.common_utils import get_openai_credentials
@@ -1725,6 +1726,8 @@ def responses(
         ):
             _raise_responses_compatibility_failure(compatibility_failure, model, custom_llm_provider)
 
+        effort_map: Final = kwargs.pop("reasoning_effort_map", None)
+        summary_override: Final = kwargs.pop("reasoning_summary_override", None)
         local_vars.update(kwargs)
         current_reasoning: Final = cast(  # cast-ok: prompt-managed reasoning arrives as a plain dict
             Reasoning | None, local_vars.get("reasoning")
@@ -1739,7 +1742,7 @@ def responses(
         deployment_reasoning: Final = cast(  # cast-ok: the resolver hands a Reasoning back in the shape it was given
             Reasoning | None,
             resolve_deployment_reasoning_effort(
-                request_reasoning,
+                apply_configured_reasoning(request_reasoning, effort_map, summary_override),
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 deployment_model_info=deployment_model_info,

@@ -3,6 +3,7 @@ from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from typing import Final, Literal
 
+from openai.types.shared_params import Reasoning
 from pydantic import TypeAdapter
 
 import litellm
@@ -25,6 +26,42 @@ _NON_STRING_EFFORT_REASON: Final = (
 )
 _REASONING_PARAMS: Final = ("reasoning", "reasoning_effort", "thinking")
 OPAQUE_VALUE: Final = TypeAdapter(object)
+
+
+ConfiguredReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max", "default"]
+
+
+def configured_reasoning_effort(
+    effort: ConfiguredReasoningEffort | None, rules: object
+) -> ConfiguredReasoningEffort | None:
+    mapping: Final = as_str_mapping(rules)
+    if effort is None or mapping is None:
+        return effort
+    match mapping.get(effort):
+        case "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "default" as replacement:
+            return replacement
+        case _:
+            return effort
+
+
+def apply_configured_reasoning(
+    reasoning: Reasoning | None, effort_map: object, summary_override: object
+) -> Reasoning | None:
+    if reasoning is None or (effort_map is None and summary_override is None):
+        return reasoning
+    effort: Final = reasoning.get("effort")
+    rewritten: Reasoning = dict(reasoning)
+    if ("effort" in reasoning) and (
+        new_effort := configured_reasoning_effort(effort, effort_map)
+    ) != "default":
+        rewritten["effort"] = new_effort
+    if "summary" in rewritten:
+        match summary_override:
+            case "drop":
+                rewritten.pop("summary")
+            case "auto" | "concise" | "detailed" as summary:
+                rewritten["summary"] = summary
+    return rewritten
 
 
 def warn_dropped_reasoning(

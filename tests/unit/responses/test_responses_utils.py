@@ -860,6 +860,42 @@ def test_responses_filters_inline_and_hoisted_tools_for_selected_deployment(
     assert input_items[1]["tools"] == [surviving_tool]
 
 
+@pytest.mark.parametrize("bridge", [False, True])
+@pytest.mark.parametrize(
+    ("requested", "override", "expected"),
+    [
+        ({"effort": "none", "summary": "detailed"}, "auto", {"effort": "low", "summary": "auto"}),
+        ({"effort": "none", "summary": "auto"}, "drop", {"effort": "low"}),
+        ({"effort": "none"}, "auto", {"effort": "low"}),
+    ],
+)
+def test_responses_applies_configured_reasoning_once(
+    bridge: bool, requested: dict[str, str], override: str, expected: dict[str, str]
+) -> None:
+    responses_module = import_module("litellm.responses.main")
+    handler = (
+        responses_module.litellm_completion_transformation_handler
+        if bridge else responses_module.base_llm_http_handler
+    )
+
+    with patch.object(handler, "response_api_handler") as upstream:
+        litellm.responses(
+            model="openai/gpt-5.4-nano",
+            input="Hello",
+            api_key="test-key",
+            reasoning=requested,
+            reasoning_effort_map={"none": "low", "low": "high"},
+            reasoning_summary_override=override,
+            use_chat_completions_api=bridge,
+        )
+
+    sent = upstream.call_args.kwargs
+    request = sent["responses_api_request" if bridge else "response_api_optional_request_params"]
+    assert request["reasoning"] == expected
+    assert "reasoning_effort_map" not in sent
+    assert "reasoning_summary_override" not in sent
+
+
 def test_responses_maps_reasoning_effort_from_litellm_params_to_reasoning():
     """
     Test that when reasoning_effort is passed in kwargs (e.g. from proxy litellm_params)
