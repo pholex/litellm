@@ -7627,6 +7627,17 @@ def test_xhigh_reasoning_effort_maps_to_the_xhigh_thinking_level_for_a_model_tha
 
 
 @pytest.mark.parametrize("model", ["gemini-4-argon", "gemini-3.8-flash", "gemini-3-pro-preview"])
+@pytest.mark.parametrize("effort", ["xhigh", "max"])
+def test_tokenweave_gemini_models_use_high_for_codex_effort(
+    model: str, effort: str, local_model_cost_map: None
+) -> None:
+    result = VertexGeminiConfig().map_openai_params(
+        non_default_params={"reasoning_effort": effort}, optional_params={}, model=model, drop_params=False
+    )
+    assert result["thinkingConfig"]["thinkingLevel"] == "high"
+
+
+@pytest.mark.parametrize("model", ["gemini-3.1-pro-preview"])
 def test_xhigh_reasoning_effort_is_a_400_for_a_gemini_model_that_does_not_support_it(
     model: str, local_model_cost_map: None
 ) -> None:

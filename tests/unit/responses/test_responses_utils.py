@@ -1139,3 +1139,19 @@ def test_responses_object_bills_an_explicit_cache_hit_at_the_explicit_rate():
         else:
             litellm.model_cost[model] = previous_row
         _invalidate_model_cost_lowercase_map()
+
+
+def test_foreign_encrypted_reasoning_is_removed_without_changing_the_original_input() -> None:
+    utils = ResponsesAPIRequestUtils
+    same = {"type": "reasoning", "encrypted_content": utils.wrap_encrypted_content_with_model_id("same", "target")}
+    foreign = {
+        "type": "reasoning",
+        "id": utils._build_encrypted_item_id("other", "rs_other"),
+        "encrypted_content": "other",
+    }
+    unmarked = {"type": "reasoning", "encrypted_content": "unmarked"}
+    readable = {"type": "reasoning", "summary": [{"type": "summary_text", "text": "keep this"}]}
+    input_items = [same, foreign, unmarked, readable]
+    assert utils.without_foreign_encrypted_reasoning(input_items, "target") == [same, readable]
+    assert utils.without_foreign_encrypted_reasoning(input_items, None) == [readable]
+    assert input_items == [same, foreign, unmarked, readable]

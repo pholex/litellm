@@ -4,7 +4,7 @@
 
 三方试合逐一用原提交的父提交、上游新标签和原提交计算。53 个提交中只有 2 个直接适用。后续补丁在其前置补丁应用后可以转为可应用。发生冲突时保留上游语义并检查本项目所需行为。
 
-候选尚未达到生产替换条件。核心阻塞项是 Codex 工具在 Bedrock Converse 的请求、SSE 和回传协议，Kimi Runtime Chat 的认证与推理，fallback 仅允许临时错误的策略，以及按部署的媒体计费。还需要验证镜像构建、运行和独立数据库副本上的迁移。表中标有待验证的项尚未达到行为等价。
+候选已在隔离 ECS 验证基本代理、Kimi Runtime Chat、GPT-6.2 Converse、Rust 路由以及合成数据升级和回读。生产切换前仍需核对生产数据库副本、供应商账单和下表标明的外部依赖。
 
 ## 候选验证
 
@@ -46,33 +46,37 @@ Gemini 图片生成和编辑都发送 Vertex 所需的 user role，转发客户�
 
 单服务器 MCP 路径报告上游 initialize 的 serverInfo.version，聚合路径报告网关版本。按 SDK 2 的 InitializeResult 读取 server_info，使用既有的上游会话缓存。新版 Discover 协议没有该字段时沿用网关版本。
 
+## 模型兼容和 Converse 流式补齐
+
+`1.110.1+tokenweave.20261120.8` 修补 Bedrock Converse 同时返回文本和原生工具时的 Responses 终态序列化。恢复 Claude 5+ 工具顶层 strict 限制、Gemini 指定部署的 xhigh/max 映射、Bedrock 推理配置名归类，以及直连 Responses 的部署级加密推理归属过滤。测试覆盖历史同源、外来源和未标记三种加密内容，跨组 affinity 仍由上游路由处理。
+
 ## 逐提交记录
 
 | 原提交 | 功能 | 三方试合 | 候选处理 |
 |---|---|---|---|
 | `f30735b3b3` | Merge upstream v1.91.4 into tokenweave/1.91.x | 无独立冲突改动 | `git show --remerge-diff` 无输出差异。较新的上游基线已包含旧版历史。 |
 | `d086df4a4e` | fix(proxy): preserve team_models ordering in get_team_models | 冲突 | 上游的 get_team_models 用 dict.fromkeys 保序。上游现有回归覆盖配置顺序。 |
-| `7cca2477d1` | ci: add GitHub Actions workflow to build linux/amd64 image for tokenweave branches | 可直接应用 | 已移植到 9924aec54a。需要验证新版 Dockerfile 的 amd64 构建和启动。 |
+| `7cca2477d1` | ci: add GitHub Actions workflow to build linux/amd64 image for tokenweave branches | 可直接应用 | 已移植到 9924aec54a。.5 的完整 amd64 CI 已通过，候选系列已在隔离 ECS 启动。 |
 | `192b2c54e3` | fix(proxy): hide all-proxy-models sentinel & -fallback targets from listings | 冲突 | 已移植到 `10f4fed760`。将占位名和内部后备路由的过滤留在展示层。 |
-| `f69aa15687` | test(proxy): update get_team_models test for all-proxy-models sentinel stripping | 冲突 | 旧 helper 的精确断言已过时。新版 helper 的上游行为需保留，覆盖客户端可见结果。 |
+| `f69aa15687` | test(proxy): update get_team_models test for all-proxy-models sentinel stripping | 冲突 | 保留新版对团队通配符的展开语义，模型列表过滤回归通过。 |
 | `cf21459934` | internal test: enable features | 冲突 | 排除。本地试验提交在提供许可证配置时强制设置 premium_user，候选使用上游许可证校验。 |
-| `1cc7745938` | fix(bedrock): suppress toolSpec strict only for Claude 5+ on Converse | 冲突 | 待对照 strict 工具被拒绝时的新版重试逻辑和 Claude 模型矩阵。 |
-| `2bbb558cf5` | fix(proxy): add drop_namespace_tools litellm_param to strip Codex namespace tools | 冲突 | 待移植旧配置开关。和 d21951ee18、f9f9bab9b5、caa65acc16、60caa505fc 一起处理。 |
+| `1cc7745938` | fix(bedrock): suppress toolSpec strict only for Claude 5+ on Converse | 冲突 | Claude 5+ 的工具顶层 strict 已抑制，保留受支持的 JSON schema 约束，Converse 模型矩阵回归通过。 |
+| `2bbb558cf5` | fix(proxy): add drop_namespace_tools litellm_param to strip Codex namespace tools | 冲突 | 已恢复旧配置开关并与允许列表共用过滤逻辑。 |
 | `d21951ee18` | fix(proxy): generalize drop_namespace_tools to keep only function-type tools | 冲突 | 首次实现保留 function 的行为已被 1.91.x 后续提交扩展。应整体移植最终行为。 |
-| `f9f9bab9b5` | feat(proxy): allowed_tool_types allowlist, applied on the native /responses path too | 冲突 | 新版没有同名的配置项。需要兼容旧白名单并验证原生 Responses、Chat 和桥接路径。 |
-| `e4b0e678f4` | fix(responses): relocate Codex Desktop additional_tools input items into the tools param | 冲突 | 新版自带 hoist_additional_tools，在 Chat 桥接、Mantle、Fireworks 和 Codex passthrough 调用。其余原生路由需验证。 |
-| `c99376c781` | fix(responses): drop empty additional_tools input items too | 冲突 | 新版 hoist_additional_tools 已移除空包装项。需随上一条验证实际启用条件。 |
+| `f9f9bab9b5` | feat(proxy): allowed_tool_types allowlist, applied on the native /responses path too | 冲突 | 已恢复部署级允许列表，原生 Responses、Chat、桥接和具名工具选择回归通过。 |
+| `e4b0e678f4` | fix(responses): relocate Codex Desktop additional_tools input items into the tools param | 冲突 | 保留上游 hoist，并在原生 Responses 白名单入口复用，覆盖旧配置的有效范围。 |
+| `c99376c781` | fix(responses): drop empty additional_tools input items too | 冲突 | 上游 hoist 删除空包装项，原生白名单及桥接回归通过。 |
 | `e905975b37` | feat(mcp): report upstream serverInfo.version on single-server gateway endpoints | 冲突 | 已恢复单服务器 initialize 的上游版本，覆盖缓存和聚合范围。 |
-| `ca4abfe5da` | build(docker): pin wolfi python to 3.13 so image builds match requires-python | 冲突 | 新版使用 Wolfi Python 3.13。保留新版 Dockerfile，需后续实打镜像。 |
-| `8ffca595c1` | build(docker): use uv managed CPython instead of the Wolfi apk python | 冲突 | 新版使用基镜像和包管理器提供的 Python 3.13，与旧 uv 下载路径不同。以实际镜像构建判断是否还需要补丁。 |
+| `ca4abfe5da` | build(docker): pin wolfi python to 3.13 so image builds match requires-python | 冲突 | 新版 Wolfi Python 3.13 已完成 amd64 构建及启动。 |
+| `8ffca595c1` | build(docker): use uv managed CPython instead of the Wolfi apk python | 冲突 | 沿用新版 Python 3.13 安装路径，成功构建、导入及运行。 |
 | `d7e8f3deb5` | feat(responses): reasoning_summary_override litellm_param for strict Bedrock models | 冲突 | 旧配置摘要覆盖已迁移。原生 Responses 和转 Chat 都覆盖替换、删除及未请求摘要三类行为。 |
-| `709ea79515` | feat(responses): drop_foreign_reasoning_items litellm_param + affinity check routes normally on model-group switch | 冲突 | 生产配置启用的 affinity 跨组切换已由新版处理，保留摘要并剥离不可解密内容。覆盖了同一加密边界和切换到其他组的单测。无 affinity 的直接调用待验证。 |
-| `590232b0bf` | fix(openai): route GPT-6 and Bedrock-named GPT-5.x through the GPT-5 reasoning config | 冲突 | 新版 OpenAI 模型配置已重构。待验证 GPT-6 和 Bedrock 模型名的配置选择。 |
+| `709ea79515` | feat(responses): drop_foreign_reasoning_items litellm_param + affinity check routes normally on model-group switch | 冲突 | 跨组 affinity 沿用上游逻辑。恢复了部署级直连过滤，覆盖同源、跨源和未标记加密项。 |
+| `590232b0bf` | fix(openai): route GPT-6 and Bedrock-named GPT-5.x through the GPT-5 reasoning config | 冲突 | 已补齐带 Bedrock 前缀的 GPT-5.x/6 名称归类，工具加显式推理的 Responses 路由通过。 |
 | `62905ea0fd` | feat(responses): flatten_tool_schema_unions litellm_param for grok-4.7 on Bedrock | 冲突 | 已恢复部署级开关，覆盖命名空间、hoisted tools、引用和有界递归。Grok 上游待实测。 |
 | `bcabe1492a` | fix(images): Codex built-in image_gen compatibility (background passthrough + JSON /images/edits) | 冲突 | 已恢复 JSON 编辑入口，覆盖 background、HTTP multipart 转发及拒绝外部 URL。 |
 | `005cba9174` | fix(cost): honor deployment per-image pricing for non-gpt-image models on the openai provider | 冲突 | 已覆盖 OpenAI 兼容图片部署的逐图价格及 Seedream 图层费率。 |
 | `ef6a1bf96a` | fix(responses): strip response-only logprobs from output_text parts in input history | 冲突 | 已移植到 `70463d54d8`，在同步 Responses 核心入口清理 replay 的 logprobs。 |
-| `d52b5277fc` | feat(minimax): backport MiniMax-H3 / H3-Max video generation via /v1/videos (upstream #43705) | 冲突 | 上游含正式实现 71e508b65d（#43705）。需跑 H3/H3-Max 的协议和计费回归。 |
+| `d52b5277fc` | feat(minimax): backport MiniMax-H3 / H3-Max video generation via /v1/videos (upstream #43705) | 冲突 | 采用上游正式实现，H3/H3-Max 协议相关回归通过。 |
 | `e6fca9f478` | feat(volcengine): backport Doubao-Seedance video generation via /v1/videos (upstream #46156) | 冲突 | 上游含正式实现 f81e657903（#46156）。额外的草稿链路单独移植。 |
 | `61a5f8b360` | feat(router): model_info.hide_from_model_list hides a model group from /v1/models | 冲突 | 已移植到 `10f4fed760`。上游 discoverable:false 存在管理员例外。 |
 | `d87c5efce0` | fix(cost): video calls bill at the deployment's own price, not the global cost map | 冲突 | 上游已有部署价优先级和 MiniMax 轮询计费修复。MiniMax 与 Volcengine 共 333 项单测通过，实际账单待验。 |
@@ -81,26 +85,26 @@ Gemini 图片生成和编辑都发送 Vertex 所需的 user role，转发客户�
 | `4019b10ad4` | feat(cost): bill layer-decomposition outputs per item at the layer rate | 冲突 | 已迁移每个图层以各自尺寸定价，单测通过。 |
 | `ef9b77f8f5` | feat(volcengine videos): Seedance 2.5 draft mode, 480p sample then a 1080p final render billed from the draft task | 可直接应用 | 已移植到 957ff16886。使用新版 Seedance 基础实现。 |
 | `41e75c05ef` | fix(volcengine videos): accept litellm's encoded video id in draft_task.id and hand Ark the draft's own id | 冲突 | 在前置草稿提交后成功移植，候选提交 c6560bce19。 |
-| `f3012996f9` | fix(gemini): detect Gemini 4 / nano-banana as Gemini 3+ (backport upstream b395bfefdd) | 冲突 | 新版已演进 Gemini 4 和 nano-banana 支持。待回归不同模型名的归类。 |
+| `f3012996f9` | fix(gemini): detect Gemini 4 / nano-banana as Gemini 3+ (backport upstream b395bfefdd) | 冲突 | 本地模型配置探针确认 Gemini 4 Argon 与 nano-banana 2.1 都归入 Gemini 3+。 |
 | `7da7af6507` | fix(gemini images): Vertex role, drop thought draft images, bill thoughtsTokenCount | 冲突 | 已恢复 Vertex user role、草稿图剔除及思考 token 计量，合成响应回归通过。 |
-| `8130e84bb4` | fix(gemini): map none/minimal to thinkingLevel low on gemini-3.7/3.8-flash | 冲突 | 待验证新版按模型映射 none/minimal。 |
-| `faee459f18` | fix(gemini): map xhigh/max to thinkingLevel high; keep medium on Gemini 4 | 冲突 | 待验证新版按模型映射 xhigh/max，并保留支持 medium 的模型。 |
+| `8130e84bb4` | fix(gemini): map none/minimal to thinkingLevel low on gemini-3.7/3.8-flash | 冲突 | 现有 Gemini 3.7/3.8 模型矩阵覆盖 none/minimal 到低档。 |
+| `faee459f18` | fix(gemini): map xhigh/max to thinkingLevel high; keep medium on Gemini 4 | 冲突 | 相关旧部署的 xhigh/max 恢复为 high，Gemini 4 Argon 的 medium 和声明支持 xhigh 的新模型保持各自档位。 |
 | `dbb95ad9bd` | feat(responses bridge): expose Codex custom tools as functions; drop empty assistant replays | 冲突 | 已复验 Bedrock Runtime 的 custom SSE、推理和结果回传，空 assistant 历史沿用新版转换。 |
 | `7d193f254c` | feat(completion): opt-in inline_image_urls for upstreams that reject image URLs | 冲突 | 已恢复旧配置开关，复用新版带 SSRF 检查和大小限制的下载器。端到端构造的 Chat 请求只替换远程图像链接。 |
 | `2fd65f720d` | feat: per-deployment reasoning_effort_map to rewrite unsupported efforts | 冲突 | 已恢复旧映射，Responses 转 Chat 路径只映射一次。 |
 | `1786fa921a` | feat(gemini images): pass thinkingConfig through generations and edits | 冲突 | 已恢复生成和编辑的 thinkingConfig，支持 JSON 对象及 multipart 中的 JSON 字符串。 |
 | `d788af5105` | fix(image edits): keep output_format / output_compression / moderation | 冲突 | 已恢复 output_format、output_compression 和 moderation，multipart 请求回归通过。 |
 | `65c3b9976f` | feat(images): forward markup edits and preserve SVG and GIF formats | 冲突 | 已恢复 markup 文件，并保留 SVG/GIF 输出格式和文件 MIME。验证了 GIF 标注及拒绝与 mask 并用。 |
-| `696bc4a80a` | fix(build): pin verified Node runtime for Prisma generation | 冲突 | 新版有独立 UI Node 镜像和打包 Prisma 缓存。需验证 Prisma 版本、引擎可用性及离线启动。 |
-| `15c69d9459` | fix(build): retain native C++ runtime and smoke test final image | 冲突 | 待验证目标容器的 C++ 运行时和最终镜像 import。以新版 Rust wheel 布局为基准。 |
+| `696bc4a80a` | fix(build): pin verified Node runtime for Prisma generation | 冲突 | 新版 Prisma 已在无外网的 Docker 测试网络完成迁移，并在隔离 ECS 读取迁移记录。 |
+| `15c69d9459` | fix(build): retain native C++ runtime and smoke test final image | 冲突 | 新版镜像成功导入 LiteLLM 与 Rust 扩展，隔离 ECS 的实际代理和回退烟测通过。 |
 | `8e1a733809` | fix(auth): isolate session tokens from stored secret ciphertext | 冲突 | 上游已有独立 bearer token 加密及同类回归。已在 `986d5d1f44` 补上无效 payload 拒绝处理，避免异常含令牌信息。 |
 | `ff7541a4b2` | feat(images): support MiniMax H3 tokens and zero-retry deployments | 冲突 | MiniMax H3 和 H3 Highspeed 的生成、编辑分项计量及零重试回归通过，供应商实际账单待验。 |
 | `7a4047aca8` | fix(images): honor deployment token rates and edit input details | 冲突 | 生成和编辑分别通过部署级文本/图片 token 费率回归，供应商实际账单待验。 |
-| `c8ed273ffe` | feat(bedrock): add opt-in native chat with IAM auth for Kimi K3.1 | 冲突 | 复用上游显式 Runtime 路由和认证，补齐 Kimi 工具与推理同时使用时的路由判定。真实 Task Role 和计费待验。 |
-| `caa65acc16` | fix(tools): reconcile filtered tool choices and normalize empty tools | 冲突 | 待与白名单统一迁移。旧版本号、旧锁文件和旧历史验收结果不作为新版改动复用。 |
-| `5aecdc24c9` | fix(bedrock): normalize Responses reasoning objects for Runtime chat | 冲突 | Kimi reasoning 对象、summary-only、null 与 custom 工具已通过签名前测试。流式与回传待实测。 |
+| `c8ed273ffe` | feat(bedrock): add opt-in native chat with IAM auth for Kimi K3.1 | 冲突 | Kimi 路由确认使用原生 Runtime Chat，隔离任务角色授权的工具、推理和回传通过。实际账单需对账。 |
+| `caa65acc16` | fix(tools): reconcile filtered tool choices and normalize empty tools | 冲突 | 具名工具选择随过滤后的工具集校正，空工具集回归通过。 |
+| `5aecdc24c9` | fix(bedrock): normalize Responses reasoning objects for Runtime chat | 冲突 | 签名前覆盖 effort/summary、summary-only 和空值。隔离 ECS 的真实推理及 custom 流回传通过。 |
 | `42fae568bb` | fix(router): restrict recovery to transient errors when configured | 冲突 | 已移植至 Rust 路由栈，覆盖错误分类、流式恢复与多跳回退。 |
-| `cfa57398a6` | fix(bedrock): forward GPT-6.2 Converse reasoning effort | 冲突 | 新版 Converse 已支持 OpenAI GPT 家族 reasoning.effort 的字符串映射。待验证 fork 的精确模型 ID、字典输入及开启工具时的 wire payload。 |
+| `cfa57398a6` | fix(bedrock): forward GPT-6.2 Converse reasoning effort | 冲突 | 精确 GPT-6.2 Sol 推理配置 ARN 的请求映射通过，真实 Converse 工具烟测覆盖推理参数。 |
 | `355a81837d` | feat(responses): bridge Codex tools to Bedrock Converse | 冲突 | 已迁移 apply_patch 和 local_shell。模拟上游的 OpenAI SDK 流式和回传通过。真实 Converse 复验待完成。 |
-| `384df3b130` | fix(responses): preserve tool search SDK compatibility | 冲突 | 新版客户端 tool_search 转换及历史有独立回归，需核对实际 SDK 与 Converse 烟测。 |
-| `60caa505fc` | fix(tools): skip non-mapping entries when reconciling tool choice | 冲突 | 待与新版工具白名单和 tool_choice 校正一并移植，保留防御处理。 |
+| `384df3b130` | fix(responses): preserve tool search SDK compatibility | 冲突 | 隔离 Converse 的真实工具搜索通过 OpenAI SDK 流式解析与结果回传。 |
+| `60caa505fc` | fix(tools): skip non-mapping entries when reconciling tool choice | 冲突 | 与白名单统一迁移，校正具名工具时跳过非对象条目。 |

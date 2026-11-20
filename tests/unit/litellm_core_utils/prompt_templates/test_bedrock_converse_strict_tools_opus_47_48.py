@@ -162,3 +162,9 @@ def test_bedrock_tools_pt_strict_dropped_for_non_anthropic(model_id: str) -> Non
     assert "strict" not in result[0]["toolSpec"]
 
 
+
+
+def test_fable_converse_omits_tool_flag_but_preserves_strict_json_schema():
+    spec = _bedrock_tools_pt(_STRICT_TOOL, model="bedrock/us.anthropic.claude-fable-5")[0]["toolSpec"]
+    assert "strict" not in spec
+    assert spec["inputSchema"]["json"]["additionalProperties"] is False

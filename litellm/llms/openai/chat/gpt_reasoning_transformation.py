@@ -151,7 +151,13 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
 
     @staticmethod
     def _gpt_series_version(model: str) -> tuple[int, int] | None:
-        match: Final = _GPT_SERIES_VERSION.match(model.split("/")[-1])
+        from litellm.llms.bedrock.common_utils import get_bedrock_base_model
+
+        name: Final = model.split("/")[-1]
+        normalized: Final = (
+            get_bedrock_base_model(name).removeprefix("openai.") if "openai.gpt-" in name else name
+        )
+        match: Final = _GPT_SERIES_VERSION.match(normalized)
         if match is None:
             return None
         return int(match.group(1)), int(match.group(2) or 0)

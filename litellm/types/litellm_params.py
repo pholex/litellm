@@ -167,6 +167,7 @@ class DispatchOptions:
     allowed_openai_params: Sequence[str] | None = None
     allowed_tool_types: Sequence[str] | None = None
     drop_namespace_tools: bool | None = None
+    drop_foreign_reasoning_items: bool | None = None
     inline_image_urls: bool | None = None
     flatten_tool_schema_unions: bool | None = None
     bridge_custom_tools_as_functions: bool | None = None

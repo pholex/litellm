@@ -1590,6 +1590,13 @@ def responses(
             use_chat_completions_api=use_chat_completions_api,
         )
         input = strip_input_logprobs(input)  # rebind-ok: sanitize replayed input after prompt management
+        if kwargs.pop("drop_foreign_reasoning_items", False) is True:
+            deployment_id: Final = (
+                deployment_model_info.get("id") if isinstance(deployment_model_info, Mapping) else None
+            )
+            input = ResponsesAPIRequestUtils.without_foreign_encrypted_reasoning(
+                input, str(deployment_id) if deployment_id is not None else None
+            )
         local_vars["input"] = input
         allowed_tool_types: Final = configured_tool_types(kwargs)
         bridge_custom_tools: Final = kwargs.pop("bridge_custom_tools_as_functions", False) is True

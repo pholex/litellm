@@ -636,6 +636,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     use_chat_completions_api: bool | None = None
     allowed_tool_types: list[str] | None = None
     drop_namespace_tools: bool | None = None
+    drop_foreign_reasoning_items: bool | None = None
     inline_image_urls: bool | None = None
     flatten_tool_schema_unions: bool | None = None
     bridge_custom_tools_as_functions: bool | None = None

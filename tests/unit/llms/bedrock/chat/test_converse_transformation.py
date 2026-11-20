@@ -938,6 +938,7 @@ def test_map_openai_params_enforces_minimum_max_tokens_for_openai_compat_models(
         "bedrock/converse/us.openai.gpt-5.6-luna",
         "us.openai.gpt-6-astra",
         "bedrock/converse/global.openai.gpt-6-astra",
+        "arn:aws:bedrock:us-east-1:111122223333:inference-profile/global.openai.gpt-6.2-sol",
     ],
 )
 def test_reasoning_effort_maps_to_reasoning_effort_for_openai_gpt5_converse(model, local_model_cost_map):

@@ -5896,6 +5896,7 @@ def _bedrock_tools_pt(
     """
     from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
     from litellm.llms.bedrock.common_utils import (
+        bedrock_converse_forwards_strict_tool_flag,
         bedrock_converse_supports_strict_tools,
         normalize_json_schema_custom_types_to_object,
     )
@@ -5907,6 +5908,7 @@ def _bedrock_tools_pt(
     # maps toolSpec to the native Anthropic tool shape, which has no strict
     # field, even though Anthropic's native API accepts it as a top-level key.
     supports_strict_tools: Final = bool(model and bedrock_converse_supports_strict_tools(model))
+    forwards_strict: Final = bool(model and bedrock_converse_forwards_strict_tool_flag(model))
     tool_block_list: Final[list[BedrockToolBlock]] = []
     for tool_idx, tool in enumerate(tools):
         # Check if tool is already a BedrockToolBlock (e.g., systemTool for Nova grounding)
@@ -5958,7 +5960,7 @@ def _bedrock_tools_pt(
                 name=name,
                 description=description,
                 parameters=parameters,
-                strict=tool.get("function", {}).get("strict", None),
+                strict=tool.get("function", {}).get("strict") if forwards_strict else None,
                 supports_strict_tools=supports_strict_tools,
             ),
         )

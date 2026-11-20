@@ -503,7 +503,7 @@ def bedrock_strict_tools_fallback(
     model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
 ) -> NativeOutputFallback | None:
     tools: Final = _TOOLS_ADAPTER.validate_python(optional_params.get("tools", ()))
-    supports_strict_tools: Final = bedrock_converse_supports_strict_tools(
+    supports_strict_tools: Final = bedrock_converse_forwards_strict_tool_flag(
         bedrock_capability_model(model, litellm_params.get("base_model"))
     )
     if not any(_sends_strict(tool, supports_strict_tools) for tool in tools):
@@ -1819,6 +1819,14 @@ def bedrock_converse_supports_strict_tools(model: str) -> bool:
         return False
     flag: Final = _bedrock_converse_model_flag(base, "bedrock_converse_supports_strict_tools")
     return flag if flag is not None else True
+
+
+_BEDROCK_CLAUDE_MODERN_FAMILY: Final = re.compile(r"anthropic[.]claude-[a-z]+-(\d+)(?:-|$)")
+
+
+def bedrock_converse_forwards_strict_tool_flag(model: str) -> bool:
+    family = _BEDROCK_CLAUDE_MODERN_FAMILY.match(get_bedrock_base_model(model))
+    return bedrock_converse_supports_strict_tools(model) and (family is None or int(family.group(1)) < 5)
 
 
 def bedrock_model_supports_regex_lookaround(model: str, litellm_params: Mapping[str, object] | None = None) -> bool:

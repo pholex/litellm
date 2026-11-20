@@ -1428,6 +1428,21 @@ def test_responses_api_bridge_check_gpt_6_astra_tools_with_default_reasoning_rou
     assert model_info.get("mode") == "responses"
 
 
+@pytest.mark.parametrize("model", ["global.openai.gpt-6-sol", "us.openai.gpt-5.6-sol"])
+def test_bedrock_openai_model_bridges_function_tools_with_explicit_reasoning(model: str) -> None:
+    from litellm.main import responses_api_bridge_check
+
+    model_info, routed_model = responses_api_bridge_check(
+        model=model,
+        custom_llm_provider="openai",
+        api_base="https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1",
+        tools=[{"type": "function", "function": {"name": "probe"}}],
+        reasoning_effort="low",
+    )
+    assert routed_model == model
+    assert model_info.get("mode") == "responses"
+
+
 def test_responses_api_bridge_check_gpt_5_5_tools_plus_reasoning_routes_to_responses():
     """gpt-5.5+ with both tools and reasoning_effort should route to Responses API."""
     from litellm.main import responses_api_bridge_check

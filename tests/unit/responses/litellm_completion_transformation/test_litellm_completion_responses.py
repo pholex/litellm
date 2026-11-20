@@ -7651,6 +7651,7 @@ def test_native_responses_tool_round_trip(
                     finish_reason="tool_calls",
                     message=Message(
                         role="assistant",
+                        content="I will request the client tool.",
                         tool_calls=[
                             ChatCompletionMessageToolCall(
                                 id=call_id,
@@ -7663,8 +7664,8 @@ def test_native_responses_tool_round_trip(
             ]
         ),
     )
-    assert len(response.output) == 1
-    call = response.output[0].model_dump(exclude_none=True)
+    assert [item.type for item in response.output] == ["message", f"{kind}_call"]
+    call = response.output[1].model_dump(exclude_none=True)
     assert call["type"] == f"{kind}_call"
     assert call["call_id"] == call_id
     assert {key: call[payload_field][key] for key in arguments} == arguments

@@ -54,6 +54,7 @@ except (ImportError, AttributeError):
 
 from typing import Annotated
 
+from openai.types.responses.response_apply_patch_tool_call import ResponseApplyPatchToolCall
 from openai.types.responses.response_compaction_item import ResponseCompactionItem
 from openai.types.responses.response_create_params import (
     Reasoning,
@@ -64,6 +65,7 @@ from openai.types.responses.response_create_params import (
 )
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
 from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
+from openai.types.responses.response_output_item import LocalShellCall
 from pydantic import (
     ConfigDict,
     Discriminator,
@@ -1597,6 +1599,8 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
             | CustomToolCallOutputItem
             | OutputToolSearchCall
             | ResponseCompactionItem
+            | ResponseApplyPatchToolCall
+            | LocalShellCall
         ]
     )
     parallel_tool_calls: bool | None = None

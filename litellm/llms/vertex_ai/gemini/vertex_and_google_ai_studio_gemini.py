@@ -1599,8 +1599,17 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return {"thinkingLevel": "medium", "includeThoughts": sends_thoughts}
         elif reasoning_effort == "high":
             return {"thinkingLevel": "high", "includeThoughts": sends_thoughts}
-        elif reasoning_effort == "xhigh" and model and VertexGeminiConfig._supports_xhigh_thinking_level(model):
-            return {"thinkingLevel": "xhigh", "includeThoughts": sends_thoughts}
+        elif reasoning_effort in ("xhigh", "max") and model:
+            if VertexGeminiConfig._supports_xhigh_thinking_level(model):
+                return {"thinkingLevel": "xhigh", "includeThoughts": sends_thoughts}
+            if model.rsplit("/", 1)[-1] in {
+                "gemini-4-argon",
+                "gemini-3.7-flash",
+                "gemini-3.8-flash",
+                "gemini-3-pro-preview",
+            }:
+                return {"thinkingLevel": "high", "includeThoughts": sends_thoughts}
+            raise _unsupported_reasoning_effort(reasoning_effort)
         elif reasoning_effort in ("disable", "none"):
             return {
                 "thinkingLevel": "minimal" if supports_minimal else "low",

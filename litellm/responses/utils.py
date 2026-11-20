@@ -690,6 +690,31 @@ class ResponsesAPIRequestUtils:
     _restore_encrypted_content_item_ids_in_input = restore_encrypted_content_item_ids_in_input
 
     @staticmethod
+    def without_foreign_encrypted_reasoning(request_input: _RequestInputT, own_model_id: str | None) -> _RequestInputT:
+        if not isinstance(request_input, list):
+            return request_input
+
+        def keep(item: object) -> bool:
+            reasoning: Final = ResponsesAPIRequestUtils._encrypted_reasoning_item(item)
+            if reasoning is None:
+                return True
+            if own_model_id is None:
+                return False
+            item_id: Final = reasoning.get("id")
+            decoded: Final = (
+                ResponsesAPIRequestUtils.decode_encrypted_item_id(item_id) if isinstance(item_id, str) else None
+            )
+            if decoded is not None:
+                return decoded.get("model_id") == own_model_id
+            encrypted: Final = reasoning.get("encrypted_content")
+            if not isinstance(encrypted, str):
+                return False
+            origin, _ = ResponsesAPIRequestUtils.unwrap_encrypted_content_with_model_id(encrypted)
+            return origin == own_model_id
+
+        return cast(_RequestInputT, [item for item in request_input if keep(item)])
+
+    @staticmethod
     def strip_encrypted_reasoning_from_input(
         request_input: object,
         *,
