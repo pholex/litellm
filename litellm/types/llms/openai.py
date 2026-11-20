@@ -1980,6 +1980,20 @@ class FunctionCallArgumentsDoneEvent(BaseResponsesStreamEvent):
     arguments: str
 
 
+class CustomToolCallInputDeltaEvent(BaseResponsesStreamEvent):
+    type: Literal[ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DELTA]
+    item_id: str
+    output_index: int
+    delta: str
+
+
+class CustomToolCallInputDoneEvent(BaseResponsesStreamEvent):
+    type: Literal[ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DONE]
+    item_id: str
+    output_index: int
+    input: str
+
+
 class FileSearchCallInProgressEvent(BaseResponsesStreamEvent):
     type: Literal[ResponsesAPIStreamEvents.FILE_SEARCH_CALL_IN_PROGRESS]
     output_index: int
@@ -2128,6 +2142,8 @@ ResponsesAPIStreamingResponse = Annotated[
     | RefusalDoneEvent
     | FunctionCallArgumentsDeltaEvent
     | FunctionCallArgumentsDoneEvent
+    | CustomToolCallInputDeltaEvent
+    | CustomToolCallInputDoneEvent
     | FileSearchCallInProgressEvent
     | FileSearchCallSearchingEvent
     | FileSearchCallCompletedEvent

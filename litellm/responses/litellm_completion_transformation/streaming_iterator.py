@@ -42,6 +42,8 @@ from litellm.types.llms.openai import (
     ContentPartDoneEvent,
     ContentPartDonePartOutputText,
     ContentPartDonePartRefusal,
+    CustomToolCallInputDeltaEvent,
+    CustomToolCallInputDoneEvent,
     FunctionCallArgumentsDeltaEvent,
     FunctionCallArgumentsDoneEvent,
     OutputItemAddedEvent,
@@ -232,6 +234,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._accumulated_provider_specific_fields: dict[str, object] = {}
         request_tools: Final = self.responses_api_request.get("tools")
         self._custom_tool_names: set[str] = extract_custom_tool_names(request_tools)
+        self._custom_tool_call_ids: set[str] = set()  # mutable-ok: ids for fragmented custom tool calls
         self._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(request_tools)
         self._web_search_calls: dict[str, object] = {}  # mutable-ok: latest call by provider id
         self._queued_web_search_call_ids: set[str] = set()  # mutable-ok: emitted call ids
@@ -506,10 +509,14 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 self._tool_args_by_call_id[call_id] = ""
                 item_kwargs = self._tool_call_item_kwargs(call_id, fn_name, "", "in_progress")
                 self._tool_item_id_by_call_id[call_id] = item_kwargs["id"]
+                if item_kwargs["type"] == "custom_tool_call":
+                    self._custom_tool_call_ids.add(call_id)
                 self._queue_output_item_added(output_index, BaseLiteLLMOpenAIResponseObject(**item_kwargs))
 
             if fn_args_delta:
                 self._tool_args_by_call_id[call_id] += fn_args_delta
+                if call_id in self._custom_tool_call_ids:
+                    continue
 
                 # Split large argument deltas into smaller chunks to match OpenAI's streaming behavior
                 # This is especially important for providers like Bedrock that send complete arguments at once
@@ -584,33 +591,37 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
             final_args = fn_args or self._tool_args_by_call_id.get(call_id, "")
 
-            # Emit delta events for arguments that weren't streamed yet
-            # This handles cases where Bedrock sends the complete tool call at the end
-            already_streamed = self._tool_args_by_call_id.get(call_id, "")
-            remaining_args = final_args[len(already_streamed) :] if final_args else ""
-
-            if remaining_args:
-                # Split into smaller chunks to match OpenAI's streaming behavior
-                chunk_size = 10  # Match typical OpenAI delta size
-                for i in range(0, len(remaining_args), chunk_size):
-                    delta_chunk = remaining_args[i : i + chunk_size]
-                    delta_event = FunctionCallArgumentsDeltaEvent(
-                        type=ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
-                        item_id=self._tool_item_id_by_call_id.get(call_id, call_id),
-                        output_index=output_index,
-                        delta=delta_chunk,
-                    )
-                    self._pending_tool_events.append(delta_event)
-
-            done_event = FunctionCallArgumentsDoneEvent(
-                type=ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE,
-                item_id=self._tool_item_id_by_call_id.get(call_id, call_id),
-                output_index=output_index,
-                arguments=final_args,
-            )
-            self._pending_tool_events.append(done_event)
-
             item_kwargs = self._tool_call_item_kwargs(call_id, fn_name, final_args, "completed")
+            if item_kwargs["type"] == "custom_tool_call":
+                self._queue_custom_tool_input(
+                    self._tool_item_id_by_call_id[call_id], output_index, item_kwargs["input"]
+                )
+            else:
+                # Emit delta events for arguments that weren't streamed yet
+                # This handles cases where Bedrock sends the complete tool call at the end
+                already_streamed = self._tool_args_by_call_id.get(call_id, "")
+                remaining_args = final_args[len(already_streamed) :] if final_args else ""
+
+                if remaining_args:
+                    # Split into smaller chunks to match OpenAI's streaming behavior
+                    chunk_size = 10  # Match typical OpenAI delta size
+                    for i in range(0, len(remaining_args), chunk_size):
+                        delta_chunk = remaining_args[i : i + chunk_size]
+                        delta_event = FunctionCallArgumentsDeltaEvent(
+                            type=ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
+                            item_id=self._tool_item_id_by_call_id.get(call_id, call_id),
+                            output_index=output_index,
+                            delta=delta_chunk,
+                        )
+                        self._pending_tool_events.append(delta_event)
+
+                done_event = FunctionCallArgumentsDoneEvent(
+                    type=ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE,
+                    item_id=self._tool_item_id_by_call_id.get(call_id, call_id),
+                    output_index=output_index,
+                    arguments=final_args,
+                )
+                self._pending_tool_events.append(done_event)
             item_kwargs["id"] = self._tool_item_id_by_call_id.setdefault(call_id, item_kwargs["id"])
             item_done_event = OutputItemDoneEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
@@ -621,6 +632,25 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 ),
             )
             self._pending_tool_events.append(item_done_event)
+
+    def _queue_custom_tool_input(self, item_id: str, output_index: int, tool_input: str) -> None:
+        if tool_input:
+            self._pending_tool_events.append(
+                CustomToolCallInputDeltaEvent(
+                    type=ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DELTA,
+                    item_id=item_id,
+                    output_index=output_index,
+                    delta=tool_input,
+                )
+            )
+        self._pending_tool_events.append(
+            CustomToolCallInputDoneEvent(
+                type=ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DONE,
+                item_id=item_id,
+                output_index=output_index,
+                input=tool_input,
+            )
+        )
 
     def _queue_web_search_events(self, call_id: str, web_search_call: object) -> None:
         from openai.types.responses import ResponseFunctionWebSearch

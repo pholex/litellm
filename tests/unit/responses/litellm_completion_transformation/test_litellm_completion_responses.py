@@ -4290,6 +4290,7 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._reasoning_output_index = None
         iterator._final_tool_events_queued = False
         iterator._custom_tool_names = set()
+        iterator._custom_tool_call_ids = set()
         iterator.responses_api_request = {}
         iterator._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(None)
         iterator._web_search_calls = {}
@@ -4440,6 +4441,13 @@ class TestEnsureOutputItemContentPartAdded:
         added = iterator._pending_tool_events[0]
         assert added.item.type == "custom_tool_call"
         assert added.item.name == "exec"
+        assert [event.type for event in iterator._pending_tool_events[1:-1]] == [
+            "response.custom_tool_call_input.delta",
+            "response.custom_tool_call_input.done",
+        ]
+        assert iterator._pending_tool_events[1].delta == "ls"
+        assert iterator._pending_tool_events[2].input == "ls"
+        assert iterator._pending_tool_events[1].item_id == added.item.id
         done = iterator._pending_tool_events[-1]
         assert done.item.type == "custom_tool_call"
         assert done.item.input == "ls"
