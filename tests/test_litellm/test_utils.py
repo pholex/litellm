@@ -4543,8 +4543,19 @@ def test_aws_bedrock_project_id_excluded_from_bedrock_optional_params():
 def test_filter_tools_by_allowed_types_drops_unknown_types():
     from litellm.utils import filter_tools_by_allowed_types
 
-    kept = {"type": "function", "function": {"name": "kept"}}
-    assert filter_tools_by_allowed_types([{"type": "local_shell"}, kept], ["function"]) == [kept]
+    function = {"type": "function", "function": {"name": "kept"}}
+    untyped = {"name": "untyped"}
+    custom = {"type": "custom", "name": "custom"}
+    namespace = {"type": "namespace", "name": "namespace", "tools": []}
+    tools = [{"type": "local_shell"}, function, untyped, custom, namespace]
+
+    assert filter_tools_by_allowed_types(tools, ["function"]) == [function, untyped]
+    assert filter_tools_by_allowed_types(tools, ["function", "custom", "namespace"]) == [
+        function,
+        untyped,
+        custom,
+        namespace,
+    ]
 
 
 @pytest.mark.parametrize("tools", [None, [], [{"type": "local_shell"}]])
@@ -4561,7 +4572,7 @@ def test_reconcile_tool_choice_after_tool_filtering(nested):
     def choice(name):
         return {"type": "function", **({"function": {"name": name}} if nested else {"name": name})}
 
-    surviving = [choice("kept")]
+    surviving = [None, choice("kept")]
     assert reconcile_tool_choice_after_tool_filtering(choice("missing"), surviving) == "auto"
     assert reconcile_tool_choice_after_tool_filtering(choice("kept"), surviving) == choice("kept")
     assert reconcile_tool_choice_after_tool_filtering(choice("missing"), None) is None

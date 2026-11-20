@@ -7460,6 +7460,8 @@ def reconcile_tool_choice_after_tool_filtering(
     if not name:
         return tool_choice
     for tool in tools:
+        if not isinstance(tool, Mapping):
+            continue
         tool_function = tool.get("function")
         tool_name = tool_function.get("name") if isinstance(tool_function, dict) else tool.get("name")
         if name == tool_name:
