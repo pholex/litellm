@@ -24,6 +24,12 @@
 
 同版恢复 `fallback_on_transient_errors_only`。Rust 路由在重试、逐跳回退和流式恢复前判断失败。跨模型回退链遇到第一个永久错误即返回该错误。Rust 核心 332 项测试通过，Python 至 Rust 路由的 400、429、503 验证通过。
 
+## Custom 工具流与 Seedream 计价
+
+`1.110.1+tokenweave.20261120.4` 对 Responses 转 Chat 的 custom 工具发出 `response.custom_tool_call_input.delta` 和 `response.custom_tool_call_input.done`。增量携带去掉 Chat 工具 JSON 包装后的输入。549 项转换和流式测试通过。
+
+同版恢复 Seedream 的部署级像素分档、图层逐张计费和输入图免费额度。379 项计费及响应类型测试通过。真实 SSE 客户端和媒体账单仍需在隔离环境复验。
+
 ## 逐提交记录
 
 | 原提交 | 功能 | 三方试合 | 候选处理 |
@@ -53,9 +59,9 @@
 | `e6fca9f478` | feat(volcengine): backport Doubao-Seedance video generation via /v1/videos (upstream #46156) | 冲突 | 上游含正式实现 f81e657903（#46156）。额外的草稿链路单独移植。 |
 | `61a5f8b360` | feat(router): model_info.hide_from_model_list hides a model group from /v1/models | 冲突 | 已移植到 `10f4fed760`。上游 discoverable:false 存在管理员例外。 |
 | `d87c5efce0` | fix(cost): video calls bill at the deployment's own price, not the global cost map | 冲突 | 上游已有部署价优先级和 MiniMax 轮询计费修复。MiniMax 与 Volcengine 共 333 项单测通过，实际账单待验。 |
-| `ba7b44b7be` | feat(cost): pixel-tier per-image pricing and free input images for deployment image pricing | 冲突 | 待适配像素分档图片价格及免费输入图。 |
+| `ba7b44b7be` | feat(cost): pixel-tier per-image pricing and free input images for deployment image pricing | 冲突 | 已迁移像素分档和免费输入图，覆盖响应尺寸、请求尺寸、usage 和默认价格。 |
 | `c261f7f87b` | fix(images): keep provider-specific per-image fields (z_index, bounding_box, name) in ImageObject.provider_specific_fields | 冲突 | 补齐 ImageObject 对原始图层元数据的收集，复用新版序列化逻辑。返回结构回归通过。 |
-| `4019b10ad4` | feat(cost): bill layer-decomposition outputs per item at the layer rate | 冲突 | 待验证按输出图层数计费。 |
+| `4019b10ad4` | feat(cost): bill layer-decomposition outputs per item at the layer rate | 冲突 | 已迁移每个图层以各自尺寸定价，单测通过。 |
 | `ef9b77f8f5` | feat(volcengine videos): Seedance 2.5 draft mode, 480p sample then a 1080p final render billed from the draft task | 可直接应用 | 已移植到 957ff16886。使用新版 Seedance 基础实现。 |
 | `41e75c05ef` | fix(volcengine videos): accept litellm's encoded video id in draft_task.id and hand Ark the draft's own id | 冲突 | 在前置草稿提交后成功移植，候选提交 c6560bce19。 |
 | `f3012996f9` | fix(gemini): detect Gemini 4 / nano-banana as Gemini 3+ (backport upstream b395bfefdd) | 冲突 | 新版已演进 Gemini 4 和 nano-banana 支持。待回归不同模型名的归类。 |

@@ -4092,6 +4092,57 @@ def test_route_image_generation_cost_honors_deployment_model_info(
     assert cost == pytest.approx(expected_cost)
 
 
+@pytest.mark.parametrize(
+    ("response_size", "request_size", "output_tokens", "is_layered", "expected"),
+    [
+        ("1024x1024", "2048x2048", 0, False, 0.094),
+        (None, "2048-x-2048", 0, False, 0.184),
+        (None, None, 8192, False, 0.094),
+        (None, None, 0, False, 0.184),
+        (None, None, 0, True, 0.071),
+    ],
+)
+def test_image_deployment_prices_seedream_pixels_layers_and_input_allowance(
+    response_size: str | None, request_size: str | None, output_tokens: int, is_layered: bool, expected: float
+) -> None:
+    usage = ImageUsage(
+        input_tokens=0,
+        input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=0),
+        output_tokens=output_tokens,
+        total_tokens=output_tokens,
+        input_images=3,
+        generated_images=2,
+    )
+    sizes = ("1024x1024", "2048x2048")
+    response = ImageResponse(
+        size=response_size,
+        data=[
+            ImageObject(
+                url=f"https://example.com/{index}.png",
+                provider_specific_fields={"size": size, "z_index": index} if is_layered else None,
+            )
+            for index, size in enumerate(sizes)
+        ],
+        usage=usage,
+    )
+    cost = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="doubao-seedream-deployment",
+        completion_response=response,
+        custom_llm_provider="openai",
+        size=request_size,
+        model_info={
+            "output_cost_per_image": 0.09,
+            "output_cost_per_image_tiers": [{"max_pixels": 2_610_000, "output_cost_per_image": 0.045}],
+            "output_cost_per_layer": 0.045,
+            "output_cost_per_layer_tiers": [{"max_pixels": 2_610_000, "output_cost_per_layer": 0.022}],
+            "input_cost_per_image": 0.002,
+            "free_input_images": 1,
+        },
+    )
+
+    assert cost == pytest.approx(expected)
+
+
 def test_route_image_generation_cost_openai_honors_deployment_input_cost_per_image(
     _local_model_cost_map: None,
 ) -> None:

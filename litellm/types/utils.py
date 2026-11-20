@@ -453,6 +453,10 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_above_512k_tokens: float | None  # MiniMax-M3: prompts >512K priced at 2x output
     output_cost_per_character_above_128k_tokens: float | None  # only for vertex ai models
     output_cost_per_image: float | None
+    output_cost_per_image_tiers: list[Mapping[str, int | float]] | None
+    output_cost_per_layer: float | None
+    output_cost_per_layer_tiers: list[Mapping[str, int | float]] | None
+    free_input_images: int | None
     output_cost_per_pixel: ReadOnly[float | None]
     output_cost_per_image_token: float | None
     output_cost_per_image_token_batches: ReadOnly[float | None]

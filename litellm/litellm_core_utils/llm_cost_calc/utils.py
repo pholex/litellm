@@ -1,6 +1,7 @@
 # What is this?
 ## Helper utilities for cost_per_token()
 
+import math
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -993,6 +994,76 @@ def flat_image_cost(model_info: ModelInfo | None, image_response: ImageResponse)
     output_cost_per_image: Final = get_cost_per_unit(model_info, "output_cost_per_image", default_value=None) or 0.0
     num_images: Final = len(image_response.data) if image_response.data else 0
     return output_cost_per_image * num_images
+
+
+def _image_pixels(size: object) -> int | None:
+    if not isinstance(size, str):
+        return None
+    dimensions: Final = re.fullmatch(r"([1-9][0-9]*)\s*-?[xX]-?\s*([1-9][0-9]*)", size.strip())
+    return int(dimensions[1]) * int(dimensions[2]) if dimensions is not None else None
+
+
+def _pixel_tier_rate(pixels: int | None, tiers: object, rate_key: str, default: float) -> float:
+    if pixels is None or not isinstance(tiers, (list, tuple)):
+        return default
+    matching: Final = (
+        (threshold, float(rate))
+        for tier in tiers
+        if isinstance(tier, Mapping)
+        and isinstance(threshold := tier.get("max_pixels"), int)
+        and pixels <= threshold
+        and isinstance(rate := tier.get(rate_key), (int, float))
+        and math.isfinite(rate)
+        and rate >= 0
+    )
+    return min(matching, default=(0, default), key=lambda tier: tier[0])[1]
+
+
+def _image_usage_count(usage: object, name: str) -> int | None:
+    count: Final = getattr(usage, name, None)
+    return count if isinstance(count, int) and not isinstance(count, bool) and count >= 0 else None
+
+
+def _tiered_deployment_image_cost(
+    model_info: ModelInfo | None, response: ImageResponse, request_size: str | None
+) -> float | None:
+    if model_info is None or not any(
+        model_info.get(key) is not None
+        for key in ("output_cost_per_image_tiers", "output_cost_per_layer", "free_input_images")
+    ):
+        return None
+    rate: Final = get_cost_per_unit(model_info, "output_cost_per_image", default_value=None)
+    if rate is None:
+        return None
+
+    usage: Final = response.usage
+    input_images: Final = _image_usage_count(usage, "input_images") or 0
+    free_images: Final = model_info.get("free_input_images")
+    allowance: Final = max(0, free_images) if isinstance(free_images, int) else 0
+    input_rate: Final = get_cost_per_unit(model_info, "input_cost_per_image") or 0.0
+    input_cost: Final = max(0, input_images - allowance) * input_rate
+
+    data: Final = response.data or ()
+    layer_fields: Final = tuple(getattr(image, "provider_specific_fields", None) for image in data)
+    image_tiers: Final = model_info.get("output_cost_per_image_tiers")
+    if layer_fields and all(isinstance(layer, Mapping) and layer.get("z_index") is not None for layer in layer_fields):
+        layer_rate: Final = get_cost_per_unit(model_info, "output_cost_per_layer", default_value=None)
+        rate_key: Final = "output_cost_per_layer" if layer_rate is not None else "output_cost_per_image"
+        layer_tiers: Final = model_info.get("output_cost_per_layer_tiers") if layer_rate is not None else image_tiers
+        return input_cost + sum(
+            _pixel_tier_rate(
+                _image_pixels(layer.get("size")), layer_tiers, rate_key, rate if layer_rate is None else layer_rate
+            )
+            for layer in layer_fields
+            if isinstance(layer, Mapping)
+        )
+
+    generated_images: Final = _image_usage_count(usage, "generated_images")
+    count: Final = len(data) if generated_images is None else generated_images
+    output_tokens: Final = _image_usage_count(usage, "output_tokens")
+    inferred_pixels: Final = output_tokens * 256 // count if output_tokens and count else None
+    pixels: Final = _image_pixels(response.size) or _image_pixels(request_size) or inferred_pixels
+    return input_cost + count * _pixel_tier_rate(pixels, image_tiers, "output_cost_per_image", rate)
 
 
 def resolve_image_model_info(model: str, custom_llm_provider: str, model_info: ModelInfo | None) -> ModelInfo:
@@ -2325,6 +2396,11 @@ class CostCalculatorUtils:
             quality or completion_response.quality or _requested_image_param(optional_params, "quality") or "standard"
         )
         resolved_n: Final = n if n is not None else (len(completion_response.data) if completion_response.data else 0)
+        tiered_cost: Final = _tiered_deployment_image_cost(
+            model_info, completion_response, size or _requested_image_size(optional_params)
+        )
+        if tiered_cost is not None:
+            return tiered_cost
         pricing: Final = deployment_pricing(model_info)
         if custom_llm_provider == litellm.LlmProviders.XAI.value:
             from litellm.llms.xai.image_generation.cost_calculator import cost_calculator as xai_image_cost_calculator
