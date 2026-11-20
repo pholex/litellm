@@ -17,6 +17,38 @@ from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConf
 from litellm.types.llms.bedrock import ConverseTokenUsageBlock
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "converse/arn:aws:bedrock:us-east-1:123456789012:inference-profile/global.openai.gpt-6.2-sol",
+        "converse/us.openai.gpt-6.2-astra",
+    ],
+)
+@pytest.mark.parametrize(
+    ("reasoning", "expected"),
+    [
+        ("low", {"effort": "low"}),
+        ("none", {"effort": "none"}),
+        ({"effort": "max", "summary": "detailed"}, {"effort": "max"}),
+        ({"summary": "auto"}, None),
+        ({"effort": None, "summary": None}, None),
+        (None, None),
+    ],
+)
+@pytest.mark.parametrize("stream", [False, True])
+def test_gpt_62_converse_reasoning_effort(model, reasoning, expected, stream):
+    config = AmazonConverseConfig()
+    assert "reasoning_effort" in config.get_supported_openai_params(model)
+    optional_params = litellm.utils.get_optional_params(
+        model=model, custom_llm_provider="bedrock", reasoning_effort=reasoning, stream=stream, drop_params=True
+    )
+    request = config.transform_request(model, [{"role": "user", "content": "Hello"}], optional_params, {}, {})
+    additional_fields = request.get("additionalModelRequestFields", {})
+    assert additional_fields.get("reasoning") == expected
+    assert "reasoning_effort" not in additional_fields
+    assert "thinking" not in additional_fields
+
+
 def test_transform_usage():
     usage = ConverseTokenUsageBlock(
         **{

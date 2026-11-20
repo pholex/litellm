@@ -100,6 +100,9 @@ UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS = [
 ]
 
 
+OPENAI_GPT_62_CONVERSE_MODELS = ("openai.gpt-6.2-sol", "openai.gpt-6.2-astra")
+
+
 class AmazonConverseConfig(BaseConfig):
     """
     Reference - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
@@ -545,7 +548,7 @@ class AmazonConverseConfig(BaseConfig):
             # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             supported_params.append("tool_choice")
 
-        if "gpt-oss" in model:
+        if "gpt-oss" in model or base_model in OPENAI_GPT_62_CONVERSE_MODELS:
             supported_params.append("reasoning_effort")
         elif self._is_nova_2_model(model):
             # Nova 2 models support reasoning_effort (transformed to reasoningConfig)
@@ -848,6 +851,7 @@ class AmazonConverseConfig(BaseConfig):
         drop_params: bool,
     ) -> dict:
         is_thinking_enabled = self.is_thinking_enabled(non_default_params)
+        is_openai_gpt_62 = BedrockModelInfo.get_base_model(model) in OPENAI_GPT_62_CONVERSE_MODELS
 
         for param, value in non_default_params.items():
             if param == "response_format" and isinstance(value, dict):
@@ -899,10 +903,15 @@ class AmazonConverseConfig(BaseConfig):
                 }
             if param == "thinking":
                 optional_params["thinking"] = value
-            elif param == "reasoning_effort" and isinstance(value, str):
-                self._handle_reasoning_effort_parameter(
-                    model=model, reasoning_effort=value, optional_params=optional_params
-                )
+            elif param == "reasoning_effort":
+                if is_openai_gpt_62:
+                    effort = value.get("effort") if isinstance(value, dict) else value
+                    if isinstance(effort, str):
+                        optional_params["reasoning"] = {"effort": effort}
+                elif isinstance(value, str):
+                    self._handle_reasoning_effort_parameter(
+                        model=model, reasoning_effort=value, optional_params=optional_params
+                    )
             elif param == "context_management" and isinstance(value, (dict, list)):
                 self._map_context_management_param(value, optional_params)
             if param == "requestMetadata":
