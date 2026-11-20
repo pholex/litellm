@@ -741,3 +741,36 @@ def test_failed_image_generation_spend_row_records_aimage_generation(monkeypatch
         end_time=db_call["end_time"],
     )
     assert (payload["status"], payload["call_type"]) == ("failure", "aimage_generation")
+
+
+def test_image_edit_json_inline_image_and_markup(monkeypatch):
+    captured = {}
+    client = _image_edit_client(monkeypatch, captured)
+    response = client.post(
+        "/v1/images/edits",
+        json={
+            "model": "test-openai-image",
+            "prompt": "replace the marked area",
+            "background": "opaque",
+            "images": [{"image_url": "data:image/gif;base64,R0lGODlh"}],
+            "markup": {"image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}},
+        },
+    )
+    assert response.status_code == 200
+    assert captured["image"][0].getvalue() == b"GIF89a"
+    assert captured["image"][0].name == "image_0.gif"
+    assert captured["markup"].getvalue() == b"\x89PNG\r\n\x1a\n"
+    assert captured["background"] == "opaque"
+    assert "images" not in captured
+
+
+def test_image_edit_json_rejects_external_image(monkeypatch):
+    captured = {}
+    client = _image_edit_client(monkeypatch, captured)
+    response = client.post(
+        "/v1/images/edits",
+        json={"prompt": "edit", "images": [{"image_url": "https://example.invalid/image.png"}]},
+    )
+    assert response.status_code == 422
+    assert "inline base64" in response.json()["detail"]
+    assert captured == {}

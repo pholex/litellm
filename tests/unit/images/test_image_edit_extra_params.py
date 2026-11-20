@@ -165,3 +165,33 @@ async def test_aimage_edit_forwards_extra_body():
     assert fields["quality_level"] == "high"
     assert "extra_body" not in fields
     assert response.data
+
+
+def test_image_edit_multipart_preserves_markup_and_output_options():
+    from io import BytesIO
+
+    captured = {}
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_image_edit_request(captured))))
+    markup = BytesIO(b"GIF89a-example-markup")
+    markup.name = "markup.gif"
+
+    litellm.image_edit(
+        model="openai/gpt-image-1",
+        image=PNG_BYTES,
+        prompt="edit the highlighted area",
+        api_key="sk-test",
+        api_base="https://edit.example/v1",
+        client=client,
+        markup=markup,
+        output_format="gif",
+        output_compression=30,
+        moderation="low",
+    )
+
+    fields = _multipart_text_fields(captured["content_type"], captured["body"])
+    assert fields["output_format"] == "gif"
+    assert fields["output_compression"] == "30"
+    assert fields["moderation"] == "low"
+    assert b'name="markup"; filename="markup.gif"' in captured["body"]
+    assert b"Content-Type: image/gif" in captured["body"]
+    assert b"GIF89a-example-markup" in captured["body"]

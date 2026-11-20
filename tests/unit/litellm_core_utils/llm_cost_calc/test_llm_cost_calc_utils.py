@@ -4670,3 +4670,27 @@ def test_token_breakdown_uses_supplied_pricing_without_catalog_lookup(rate: floa
         10 * breakdown.rates.input_cost_per_token + breakdown.cache_read_cost + breakdown.cache_creation_cost
     )
     assert output_cost == pytest.approx(3 * breakdown.rates.output_cost_per_token)
+
+
+@pytest.mark.parametrize("call_type", ["image_generation", "aimage_edit"])
+def test_openai_compatible_image_cost_uses_deployment_text_and_image_token_rates(call_type: str) -> None:
+    usage = ImageUsage(
+        input_tokens=10,
+        input_tokens_details=ImageUsageInputTokensDetails(image_tokens=7, text_tokens=3),
+        output_tokens=20,
+        total_tokens=30,
+    )
+    pricing = {
+        "input_cost_per_token": 0.002,
+        "input_cost_per_image_token": 0.003,
+        "output_cost_per_image_token": 0.004,
+    }
+
+    cost = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="opaque-deployment-id",
+        completion_response=_image_response(usage=usage),
+        custom_llm_provider="openai",
+        call_type=call_type,
+        model_info=cast(ModelInfo, pricing),
+    )
+    assert cost == pytest.approx(3 * 0.002 + 7 * 0.003 + 20 * 0.004)

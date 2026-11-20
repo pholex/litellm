@@ -53,7 +53,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         """
         supported_params: Final = ["n", "size"]
         if is_gemini_image_model(model):
-            supported_params.extend(["imageConfig", "tools", "web_search_options"])
+            supported_params.extend(["imageConfig", "thinkingConfig", "tools", "web_search_options"])
         return supported_params
 
     def map_openai_params(
@@ -145,7 +145,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         # For Gemini Flash Image Preview models, use standard Gemini format
         if is_gemini_image_model(model):
             request_body: Final[dict] = {
-                "contents": [{"parts": [{"text": prompt}]}],
+                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
                 "generationConfig": get_gemini_image_generation_config(
                     model=model,
                     optional_params=optional_params,
@@ -213,6 +213,8 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                     # Look for inlineData with image
                     if "inlineData" in part:
                         part_object = _JSON_OBJECT.validate_python(part)
+                        if part_object.get("thought") is True:
+                            continue
                         inline_data = _JSON_CONTAINER.validate_python(part_object["inlineData"])
                         if "data" in inline_data:
                             thought_sig = part_object.get("thoughtSignature")

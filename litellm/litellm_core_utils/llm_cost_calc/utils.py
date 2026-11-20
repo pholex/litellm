@@ -2484,9 +2484,12 @@ class CostCalculatorUtils:
             custom_llm_provider == litellm.LlmProviders.OPENAI.value
             or custom_llm_provider == litellm.LlmProviders.AZURE.value
         ):
-            # gpt-image models use token-based pricing.
-            model_lower: Final = model.lower()
-            if "gpt-image" in model_lower:
+            model_lower: Final = model.lower().removeprefix("openai/")
+            if (
+                "gpt-image" in model_lower
+                or model_lower in {"minimax-h3-image", "minimax-h3-image-highspeed"}
+                or (pricing is not None and pricing.get("output_cost_per_image_token") is not None)
+            ):
                 from litellm.llms.openai.image_generation.cost_calculator import (
                     cost_calculator as openai_gpt_image_cost_calculator,
                 )

@@ -46,7 +46,7 @@ def _json_body(response: _JsonResponse) -> object:
 
 class GeminiImageEditConfig(BaseImageEditConfig):
     DEFAULT_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta"
-    SUPPORTED_PARAMS: list[str] = ["n", "size", "imageConfig"]
+    SUPPORTED_PARAMS: list[str] = ["n", "size", "imageConfig", "thinkingConfig"]
 
     def get_supported_openai_params(self, model: str) -> list[str]:
         return list(self.SUPPORTED_PARAMS)
@@ -113,6 +113,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
 
         contents: Final = [
             {
+                "role": "user",
                 "parts": parts,
             }
         ]
@@ -153,6 +154,8 @@ class GeminiImageEditConfig(BaseImageEditConfig):
             content = candidate.get("content", {})
             parts = content.get("parts", [])
             for part in parts:
+                if part.get("thought") is True:
+                    continue
                 inline_data = part.get("inlineData")
                 image_data = inline_data.get("data") if inline_data else None
                 if image_data:

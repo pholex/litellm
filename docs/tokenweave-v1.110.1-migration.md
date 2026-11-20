@@ -1,6 +1,6 @@
 # LiteLLM v1.110.1 fork 迁移记录
 
-候选分支基于 BerriAI 正式标签 `v1.110.1`（`47b394ba1b5bbe7f4b3f119a95b56957f4a32fad`）。迁移来源是 `tokenweave/1.91.x@60caa505fc`，以旧正式标签 `v1.91.4@4820053a81` 为界。旧主线较新标签有 89 个尚未在其历史中的提交，其中 35 个属于旧上游稳定版历史，另外 54 个位于 fork 第一父链，其中一次合入旧稳定标签的 merge 没有手工解冲突差异。以下清单覆盖其余 53 个第一父链提交。
+候选分支基于 BerriAI 正式标签 `v1.110.1`（`47b394ba1b5bbe7f4b3f119a95b56957f4a32fad`）。迁移来源是 `tokenweave/1.91.x@60caa505fc`，以旧正式标签 `v1.91.4@4820053a81` 为界。旧主线较新标签有 89 个尚未在其历史中的提交，其中 35 个属于旧上游稳定版历史，另外 54 个位于 fork 第一父链，其中一次合入旧稳定标签的 merge 没有手工解冲突差异。下表逐项列出 54 个第一父链提交。
 
 三方试合逐一用原提交的父提交、上游新标签和原提交计算。53 个提交中只有 2 个直接适用。后续补丁在其前置补丁应用后可以转为可应用。发生冲突时保留上游语义并检查本项目所需行为。
 
@@ -34,10 +34,17 @@
 
 `1.110.1+tokenweave.20261120.5` 恢复 `reasoning_effort_map`、`reasoning_summary_override`、`inline_image_urls` 和 `flatten_tool_schema_unions`。沿用新版图片下载保护，工具 schema 转换支持引用、命名空间和递归限制。原生及桥接 Responses 的推理和工具 schema 用例以及图片 URL 用例通过。Grok 和图片上游仍需实测。
 
+## 图片协议和计费复验
+
+`1.110.1+tokenweave.20261120.6` 恢复 Codex JSON 图片编辑、multipart 标注文件及输出选项。内联图片只接收支持的 base64 图片类型，禁止代理获取外部 URL。旧分支的图片编辑、Codex 图片工具及 MiniMax H3 模拟上游用例共 25 项通过，覆盖生成和编辑的计量、部分失败结果、按部署的费率和零重试。
+
+Gemini 图片生成和编辑都发送 Vertex 所需的 user role，转发客户端 thinkingConfig，过滤带 thought 标记的草稿图，并将单独报告的思考 token 按输出文本 token 计量。这一轮使用合成请求、响应及账单费率。
+
 ## 逐提交记录
 
 | 原提交 | 功能 | 三方试合 | 候选处理 |
 |---|---|---|---|
+| `f30735b3b3` | Merge upstream v1.91.4 into tokenweave/1.91.x | 无独立冲突改动 | `git show --remerge-diff` 无输出差异。较新的上游基线已包含旧版历史。 |
 | `d086df4a4e` | fix(proxy): preserve team_models ordering in get_team_models | 冲突 | 上游的 get_team_models 用 dict.fromkeys 保序。上游现有回归覆盖配置顺序。 |
 | `7cca2477d1` | ci: add GitHub Actions workflow to build linux/amd64 image for tokenweave branches | 可直接应用 | 已移植到 9924aec54a。需要验证新版 Dockerfile 的 amd64 构建和启动。 |
 | `192b2c54e3` | fix(proxy): hide all-proxy-models sentinel & -fallback targets from listings | 冲突 | 已移植到 `10f4fed760`。将占位名和内部后备路由的过滤留在展示层。 |
@@ -56,8 +63,8 @@
 | `709ea79515` | feat(responses): drop_foreign_reasoning_items litellm_param + affinity check routes normally on model-group switch | 冲突 | 生产配置启用的 affinity 跨组切换已由新版处理，保留摘要并剥离不可解密内容。覆盖了同一加密边界和切换到其他组的单测。无 affinity 的直接调用待验证。 |
 | `590232b0bf` | fix(openai): route GPT-6 and Bedrock-named GPT-5.x through the GPT-5 reasoning config | 冲突 | 新版 OpenAI 模型配置已重构。待验证 GPT-6 和 Bedrock 模型名的配置选择。 |
 | `62905ea0fd` | feat(responses): flatten_tool_schema_unions litellm_param for grok-4.7 on Bedrock | 冲突 | 已恢复部署级开关，覆盖命名空间、hoisted tools、引用和有界递归。Grok 上游待实测。 |
-| `bcabe1492a` | fix(images): Codex built-in image_gen compatibility (background passthrough + JSON /images/edits) | 冲突 | 待核对 Codex JSON 图片编辑入口和 background 字段。 |
-| `005cba9174` | fix(cost): honor deployment per-image pricing for non-gpt-image models on the openai provider | 冲突 | 待核对 OpenAI 兼容图片模型的部署级单价。 |
+| `bcabe1492a` | fix(images): Codex built-in image_gen compatibility (background passthrough + JSON /images/edits) | 冲突 | 已恢复 JSON 编辑入口，覆盖 background、HTTP multipart 转发及拒绝外部 URL。 |
+| `005cba9174` | fix(cost): honor deployment per-image pricing for non-gpt-image models on the openai provider | 冲突 | 已覆盖 OpenAI 兼容图片部署的逐图价格及 Seedream 图层费率。 |
 | `ef6a1bf96a` | fix(responses): strip response-only logprobs from output_text parts in input history | 冲突 | 已移植到 `70463d54d8`，在同步 Responses 核心入口清理 replay 的 logprobs。 |
 | `d52b5277fc` | feat(minimax): backport MiniMax-H3 / H3-Max video generation via /v1/videos (upstream #43705) | 冲突 | 上游含正式实现 71e508b65d（#43705）。需跑 H3/H3-Max 的协议和计费回归。 |
 | `e6fca9f478` | feat(volcengine): backport Doubao-Seedance video generation via /v1/videos (upstream #46156) | 冲突 | 上游含正式实现 f81e657903（#46156）。额外的草稿链路单独移植。 |
@@ -69,20 +76,20 @@
 | `ef9b77f8f5` | feat(volcengine videos): Seedance 2.5 draft mode, 480p sample then a 1080p final render billed from the draft task | 可直接应用 | 已移植到 957ff16886。使用新版 Seedance 基础实现。 |
 | `41e75c05ef` | fix(volcengine videos): accept litellm's encoded video id in draft_task.id and hand Ark the draft's own id | 冲突 | 在前置草稿提交后成功移植，候选提交 c6560bce19。 |
 | `f3012996f9` | fix(gemini): detect Gemini 4 / nano-banana as Gemini 3+ (backport upstream b395bfefdd) | 冲突 | 新版已演进 Gemini 4 和 nano-banana 支持。待回归不同模型名的归类。 |
-| `7da7af6507` | fix(gemini images): Vertex role, drop thought draft images, bill thoughtsTokenCount | 冲突 | 待回归 Vertex role、草稿图剔除和思考 token 计费。 |
+| `7da7af6507` | fix(gemini images): Vertex role, drop thought draft images, bill thoughtsTokenCount | 冲突 | 已恢复 Vertex user role、草稿图剔除及思考 token 计量，合成响应回归通过。 |
 | `8130e84bb4` | fix(gemini): map none/minimal to thinkingLevel low on gemini-3.7/3.8-flash | 冲突 | 待验证新版按模型映射 none/minimal。 |
 | `faee459f18` | fix(gemini): map xhigh/max to thinkingLevel high; keep medium on Gemini 4 | 冲突 | 待验证新版按模型映射 xhigh/max，并保留支持 medium 的模型。 |
 | `dbb95ad9bd` | feat(responses bridge): expose Codex custom tools as functions; drop empty assistant replays | 冲突 | 上游有 custom_tools.py 和 SSE 回转。待核对 Bedrock Runtime 与空 assistant 历史的覆盖。 |
 | `7d193f254c` | feat(completion): opt-in inline_image_urls for upstreams that reject image URLs | 冲突 | 已恢复旧配置开关，复用新版带 SSRF 检查和大小限制的下载器。端到端构造的 Chat 请求只替换远程图像链接。 |
 | `2fd65f720d` | feat: per-deployment reasoning_effort_map to rewrite unsupported efforts | 冲突 | 已恢复旧映射，Responses 转 Chat 路径只映射一次。 |
-| `1786fa921a` | feat(gemini images): pass thinkingConfig through generations and edits | 冲突 | 待验证 Gemini image generations 和 edits 的 thinkingConfig。 |
-| `d788af5105` | fix(image edits): keep output_format / output_compression / moderation | 冲突 | 待验证 edits 的 output_format、output_compression 和 moderation。 |
-| `65c3b9976f` | feat(images): forward markup edits and preserve SVG and GIF formats | 冲突 | 待验证编辑时 markup 的传递，以及 SVG/GIF 格式维持。 |
+| `1786fa921a` | feat(gemini images): pass thinkingConfig through generations and edits | 冲突 | 已恢复生成和编辑的 thinkingConfig，支持 JSON 对象及 multipart 中的 JSON 字符串。 |
+| `d788af5105` | fix(image edits): keep output_format / output_compression / moderation | 冲突 | 已恢复 output_format、output_compression 和 moderation，multipart 请求回归通过。 |
+| `65c3b9976f` | feat(images): forward markup edits and preserve SVG and GIF formats | 冲突 | 已恢复 markup 文件，并保留 SVG/GIF 输出格式和文件 MIME。验证了 GIF 标注及拒绝与 mask 并用。 |
 | `696bc4a80a` | fix(build): pin verified Node runtime for Prisma generation | 冲突 | 新版有独立 UI Node 镜像和打包 Prisma 缓存。需验证 Prisma 版本、引擎可用性及离线启动。 |
 | `15c69d9459` | fix(build): retain native C++ runtime and smoke test final image | 冲突 | 待验证目标容器的 C++ 运行时和最终镜像 import。以新版 Rust wheel 布局为基准。 |
 | `8e1a733809` | fix(auth): isolate session tokens from stored secret ciphertext | 冲突 | 上游已有独立 bearer token 加密及同类回归。已在 `986d5d1f44` 补上无效 payload 拒绝处理，避免异常含令牌信息。 |
-| `ff7541a4b2` | feat(images): support MiniMax H3 tokens and zero-retry deployments | 冲突 | 待验证 H3 图像 token 计量、部署级价格及零重试。 |
-| `7a4047aca8` | fix(images): honor deployment token rates and edit input details | 冲突 | 待回归 edits 输入细目和每部署 token 单价。 |
+| `ff7541a4b2` | feat(images): support MiniMax H3 tokens and zero-retry deployments | 冲突 | MiniMax H3 和 H3 Highspeed 的生成、编辑分项计量及零重试回归通过，供应商实际账单待验。 |
+| `7a4047aca8` | fix(images): honor deployment token rates and edit input details | 冲突 | 生成和编辑分别通过部署级文本/图片 token 费率回归，供应商实际账单待验。 |
 | `c8ed273ffe` | feat(bedrock): add opt-in native chat with IAM auth for Kimi K3.1 | 冲突 | 复用上游显式 Runtime 路由和认证，补齐 Kimi 工具与推理同时使用时的路由判定。真实 Task Role 和计费待验。 |
 | `caa65acc16` | fix(tools): reconcile filtered tool choices and normalize empty tools | 冲突 | 待与白名单统一迁移。旧版本号、旧锁文件和旧历史验收结果不作为新版改动复用。 |
 | `5aecdc24c9` | fix(bedrock): normalize Responses reasoning objects for Runtime chat | 冲突 | Kimi reasoning 对象、summary-only、null 与 custom 工具已通过签名前测试。流式与回传待实测。 |

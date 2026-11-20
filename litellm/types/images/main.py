@@ -13,6 +13,12 @@ class ImageEditOptionalRequestParams(TypedDict, total=False):
     """
 
     background: Literal["transparent", "opaque", "auto"] | None
+    complexity: Literal["low", "medium", "high"] | None
+    markup: FileTypes | None
+    safety_identifier: str | None
+    moderation: Literal["auto", "low"] | None
+    output_compression: int | str | None
+    output_format: Literal["png", "jpeg", "webp", "svg", "gif"] | None
     input_fidelity: Literal["high", "low"] | None
     mask: str | None
     n: int | None
@@ -21,6 +27,7 @@ class ImageEditOptionalRequestParams(TypedDict, total=False):
     size: str | None
     user: str | None
     imageConfig: dict[str, object] | None
+    thinkingConfig: dict[str, object] | str | None
 
 
 class ImageEditRequestParams(ImageEditOptionalRequestParams, total=False):

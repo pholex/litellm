@@ -1011,7 +1011,9 @@ def image_edit(
             or custom_llm_provider == "azure"
             or custom_llm_provider in litellm.openai_compatible_providers
         ):
-            dropped_form_params: Final = header_auth_params(custom_llm_provider)
+            dropped_form_params: Final = header_auth_params(custom_llm_provider) | {"markup"}
+            if isinstance(extra_body, dict) and "markup" in extra_body and "markup" in provider_supported_params:
+                image_edit_request_params["markup"] = extra_body["markup"]
             image_edit_request_params.update(
                 flatten_form_field_values(
                     {key: value for key, value in non_default_params.items() if key not in dropped_form_params},

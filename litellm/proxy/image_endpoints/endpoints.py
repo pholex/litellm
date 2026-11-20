@@ -1,9 +1,11 @@
 import asyncio
+import base64
+import binascii
 import io
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from itertools import chain
 from types import MappingProxyType
-from typing import Final, get_type_hints
+from typing import Annotated, Final, get_type_hints
 
 import orjson
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
@@ -48,6 +50,44 @@ IMAGE_EDIT_OPTIONAL_FIELD_DEFAULTS: Final = MappingProxyType({"prompt": None, "i
 IMAGE_ARRAY_FIELD: Final = "image[]"
 MASK_ARRAY_FIELD: Final = "mask[]"
 BRACKETED_FILE_FIELDS: Final = frozenset({IMAGE_ARRAY_FIELD, MASK_ARRAY_FIELD})
+_INLINE_IMAGE_EXTENSIONS: Final = MappingProxyType(
+    {
+        "image/png": "png",
+        "image/jpeg": "jpg",
+        "image/jpg": "jpg",
+        "image/webp": "webp",
+        "image/gif": "gif",
+        "image/svg+xml": "svg",
+    }
+)
+
+
+def _inline_image(item: object, field: str, filename: str) -> io.BytesIO:
+    url = item.get("image_url") if isinstance(item, Mapping) else None
+    if isinstance(url, Mapping):
+        url = url.get("url")
+    if not isinstance(url, str) or not url.startswith("data:"):
+        raise HTTPException(status_code=422, detail=f"{field}: send an inline base64 image URL")
+    header, separator, encoded = url[5:].partition(",")
+    mime, _, encoding = header.partition(";")
+    extension = _INLINE_IMAGE_EXTENSIONS.get(mime.lower())
+    if not separator or encoding.lower() != "base64" or extension is None:
+        raise HTTPException(status_code=422, detail=f"{field}: unsupported image data URL")
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"{field}: invalid base64 payload") from exc
+    if not raw:
+        raise HTTPException(status_code=422, detail=f"{field}: empty image payload")
+    buffer = io.BytesIO(raw)
+    buffer.name = f"{filename}.{extension}"
+    return buffer
+
+
+def json_images_to_bytesio(images: object) -> list[io.BytesIO]:
+    if not isinstance(images, list) or not images:
+        raise HTTPException(status_code=422, detail="'images' must be a non-empty list")
+    return [_inline_image(item, f"images[{index}]", f"image_{index}") for index, item in enumerate(images)]
 
 
 async def uploadfile_to_bytesio(upload: UploadFile) -> io.BytesIO:
@@ -272,6 +312,7 @@ async def image_edit_api(
     image_array: list[UploadFile] | None = File(None, alias=IMAGE_ARRAY_FIELD),
     mask: list[UploadFile] | None = File(None),
     mask_array: list[UploadFile] | None = File(None, alias=MASK_ARRAY_FIELD),
+    markup: Annotated[UploadFile | None, File()] = None,
     model: str | None = None,
 ):
     """
@@ -332,10 +373,18 @@ async def image_edit_api(
     mask_files: Final = await batch_to_bytesio(mask)
     if image_files:
         data["image"] = image_files
+    elif "images" in data and data["image"] is None:
+        data["image"] = json_images_to_bytesio(data.pop("images"))
     if mask_files:
         data["mask"] = mask_files
+    if markup is not None:
+        data["markup"] = await uploadfile_to_bytesio(markup)
+    elif isinstance(data.get("markup"), Mapping):
+        data["markup"] = _inline_image(data["markup"], "markup", "markup")
+    if data.get("markup") is not None and data.get("mask") is not None:
+        raise HTTPException(status_code=400, detail="markup cannot be combined with mask")
 
-    for _field in ("image", "mask"):
+    for _field in ("image", "mask", "markup"):
         if _field in data and isinstance(data[_field], str):
             raise HTTPException(
                 status_code=422,

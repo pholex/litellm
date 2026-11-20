@@ -583,3 +583,39 @@ def test_gemini_image_generation_response_rejection_text_is_the_same_wherever_th
         {"candidates": [{"content": {"parts": [malformed_entry]}}]}
     )
     assert _rejection_text({"candidates": late_candidates}) == _rejection_text({"candidates": [malformed_entry]})
+
+
+def test_gemini_image_request_forwards_vertex_role_and_thinking_config():
+    config = GoogleImageGenConfig()
+    params = config.map_openai_params({"thinkingConfig": {"thinkingLevel": "HIGH"}}, {}, _GEMINI_IMAGE_MODEL, False)
+    request = config.transform_image_generation_request(_GEMINI_IMAGE_MODEL, "draw a cup", params, {}, {})
+    assert request["contents"][0]["role"] == "user"
+    assert request["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "HIGH"}
+
+
+def test_gemini_image_output_skips_draft_and_counts_reasoning_tokens():
+    response = _transform_response(
+        _GEMINI_IMAGE_MODEL,
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {"thought": True, "inlineData": {"data": "draft"}},
+                            {"inlineData": {"data": "final"}},
+                        ]
+                    }
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 9,
+                "candidatesTokenCount": 30,
+                "thoughtsTokenCount": 11,
+                "totalTokenCount": 50,
+            },
+        },
+    )
+    assert [image.b64_json for image in response.data] == ["final"]
+    assert response.usage.output_tokens == 41
+    assert response.usage.output_tokens_details == {"image_tokens": 30, "text_tokens": 11}
+    assert response.usage.total_tokens == 50

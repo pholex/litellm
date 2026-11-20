@@ -39,17 +39,22 @@ def transform_gemini_image_usage(usage_metadata: dict) -> ImageUsage:
     Transform Gemini usageMetadata to ImageUsage format.
     """
     input_tokens_details = _sum_modality_token_details(usage_metadata, "promptTokensDetails", "prompt_tokens_details")
-    output_tokens: Final = usage_metadata.get("candidatesTokenCount", 0)
+    candidate_tokens: Final = usage_metadata.get("candidatesTokenCount", 0)
     output_tokens_details: Final = _sum_modality_token_details(
         usage_metadata, "candidatesTokensDetails", "candidates_tokens_details"
     )
 
     if not _get_modality_token_details(usage_metadata, "candidatesTokensDetails", "candidates_tokens_details"):
-        output_tokens_details.image_tokens = output_tokens
+        output_tokens_details.image_tokens = candidate_tokens
     else:
         known_output_tokens: Final = output_tokens_details.text_tokens + output_tokens_details.image_tokens
-        if output_tokens > known_output_tokens:
-            output_tokens_details.text_tokens += output_tokens - known_output_tokens
+        if candidate_tokens > known_output_tokens:
+            output_tokens_details.text_tokens += candidate_tokens - known_output_tokens
+
+    raw_thought_tokens: Final = usage_metadata.get("thoughtsTokenCount", usage_metadata.get("thoughts_token_count"))
+    thought_tokens: Final = max(raw_thought_tokens, 0) if isinstance(raw_thought_tokens, int) else 0
+    output_tokens_details.text_tokens += thought_tokens
+    output_tokens: Final = candidate_tokens + thought_tokens
 
     usage_payload: Final[dict[str, object]] = {
         "input_tokens": usage_metadata.get("promptTokenCount", 0),

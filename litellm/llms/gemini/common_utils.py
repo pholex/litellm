@@ -319,6 +319,18 @@ def get_gemini_image_generation_config(
     if image_config:
         generation_config["imageConfig"] = image_config
 
+    raw_thinking_config: Final = optional_params.get("thinkingConfig")
+    try:
+        thinking_config: Final = (
+            json.loads(raw_thinking_config) if isinstance(raw_thinking_config, str) else raw_thinking_config
+        )
+    except json.JSONDecodeError as exc:
+        raise litellm.UnsupportedParamsError(model=model, message="thinkingConfig must be a JSON object") from exc
+    if isinstance(thinking_config, dict) and thinking_config:
+        generation_config["thinkingConfig"] = thinking_config
+    elif thinking_config is not None and not isinstance(thinking_config, dict):
+        raise litellm.UnsupportedParamsError(model=model, message="thinkingConfig must be a JSON object")
+
     candidate_count: Final = next(
         (
             optional_params[key]

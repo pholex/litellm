@@ -1,4 +1,5 @@
-from io import BufferedReader
+from io import BufferedReader, BytesIO
+from mimetypes import guess_type
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
@@ -42,6 +43,12 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
             "image",
             "prompt",
             "background",
+            "complexity",
+            "markup",
+            "moderation",
+            "output_compression",
+            "output_format",
+            "safety_identifier",
             "input_fidelity",
             "mask",
             "model",
@@ -72,12 +79,15 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         field_name: str,
     ) -> None:
         """Add an image to the files list with appropriate content type"""
-        image_content_type: Final = ImageEditRequestUtils.get_image_content_type(image)
-
-        if isinstance(image, BufferedReader):
-            files_list.append((field_name, (image.name, image, image_content_type)))
-        else:
-            files_list.append((field_name, ("image.png", image, image_content_type)))
+        name = getattr(image, "name", None) if isinstance(image, (BufferedReader, BytesIO)) else None
+        image_content_type: Final = (
+            "image/svg+xml"
+            if isinstance(name, str) and guess_type(name)[0] == "image/svg+xml"
+            else ImageEditRequestUtils.get_image_content_type(image)
+        )
+        files_list.append(
+            (field_name, (name or ("mask.png" if field_name == "mask" else "image.png"), image, image_content_type))
+        )
 
     def transform_image_edit_request(
         self,
@@ -112,7 +122,10 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         #########################################################
         _image_list: Final = request_dict.get("image")
         _mask = request_dict.get("mask")
-        data_without_files: Final = {k: v for k, v in request_dict.items() if k not in ["image", "mask"]}
+        markup: Final = request_dict.get("markup")
+        if markup is not None and _mask is not None:
+            raise OpenAIError(message="markup cannot be combined with mask", status_code=400)
+        data_without_files: Final = {k: v for k, v in request_dict.items() if k not in {"image", "mask", "markup"}}
         files_list: Final[list[tuple[str, Any]]] = []
 
         # Handle image parameter
@@ -126,6 +139,8 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
                         image=_image,
                         field_name="image[]",
                     )
+        if markup is not None:
+            self._add_image_to_files(files_list, markup, "markup")
         # Handle mask parameter if provided
         if _mask is not None:
             # Handle case where mask can be a list (extract first mask)
@@ -133,11 +148,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
                 _mask = _mask[0] if _mask else None
 
             if _mask is not None:
-                mask_content_type: Final[str] = ImageEditRequestUtils.get_image_content_type(_mask)
-                if isinstance(_mask, BufferedReader):
-                    files_list.append(("mask", (_mask.name, _mask, mask_content_type)))
-                else:
-                    files_list.append(("mask", ("mask.png", _mask, mask_content_type)))
+                self._add_image_to_files(files_list, _mask, "mask")
 
         return data_without_files, files_list
 
