@@ -236,6 +236,7 @@ class UpdateRouterConfig(LiteLLMBaseModel):
     tag_routing_prefix: str | None = None
     optional_pre_call_checks: OptionalPreCallChecks | None = None
     fallback_on_unsupported_params: bool | None = None
+    fallback_on_transient_errors_only: bool | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 

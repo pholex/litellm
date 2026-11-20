@@ -34,6 +34,7 @@ pub struct Settings {
     pub background_health_check_model_groups: Option<Arc<[String]>>,
     pub enable_weighted_failover: bool,
     pub fallback_on_unsupported_params: bool,
+    pub fallback_on_transient_errors_only: bool,
     pub provider_default_deployment_ids: Arc<[String]>,
     pub dynamic: Arc<RouterDynamicConfig>,
 }
@@ -74,6 +75,9 @@ impl Settings {
                 .map(Into::into),
             enable_weighted_failover: config.enable_weighted_failover,
             fallback_on_unsupported_params: config.fallback_on_unsupported_params.unwrap_or(true),
+            fallback_on_transient_errors_only: config
+                .fallback_on_transient_errors_only
+                .unwrap_or_default(),
             provider_default_deployment_ids: config.provider_default_deployment_ids.clone().into(),
             dynamic,
         }

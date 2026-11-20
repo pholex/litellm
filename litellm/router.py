@@ -102,6 +102,7 @@ def _router_init(
     cooldown_time: float | None = None,  # (seconds) time to cooldown a deployment after failure
     disable_cooldowns: bool | None = None,
     fallback_on_unsupported_params: bool = True,
+    fallback_on_transient_errors_only: bool = False,
     routing_strategy: RoutingStrategyName = "simple-shuffle",
     optional_pre_call_checks: OptionalPreCallChecks | None = None,
     routing_strategy_args: dict = {},  # just for latency-based
@@ -163,6 +164,7 @@ def _router_init(
             whose deployment is in cooldown or removed. Async routes only. Defaults to False. Applied at startup.
         ignore_invalid_deployments (bool): Ignores invalid deployments, and continues with other deployments. Default is to raise an error.
         enable_weighted_failover (bool): When True and the routing strategy is "simple-shuffle", a retryable failure on one deployment causes the request to re-pick (weighted) across the other deployments in the same model group before any cross-group fallback runs. Bounded by `max_fallbacks`. Async-only: currently honored by `router.acompletion()` and other async entrypoints. The sync `router.completion()` path falls back to the regular fallback flow. Defaults to False.
+        fallback_on_transient_errors_only (bool): Limit retries and fallbacks to timeouts, rate limits, connection failures, temporary unavailability and HTTP 5xx responses. Defaults to False.
         enable_mid_stream_fallback_continuation (bool): When True, a chat-completions stream that breaks after plain assistant text has been delivered continues on a fallback deployment via assistant prefill instead of surfacing the error. Only deployments whose model supports assistant prefill are eligible, so the partial text is continued, not regenerated; if none is, the original error is surfaced. Streams that emitted tool calls, thinking blocks, audio/images, or constrained (JSON / forced tool_choice) output are never continued. Async-only. Defaults to False.
         fallback_access_check (Optional[FallbackAccessCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects is skipped. Defaults to None (every configured fallback is attempted).
         fallback_budget_check (Optional[FallbackBudgetCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects as over budget is skipped. Defaults to None (budget is not re-checked on fallback).

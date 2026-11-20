@@ -255,6 +255,66 @@ async fn a_bad_request_falls_back_without_retrying(config: RouterConfig) {
 }
 
 #[rstest]
+#[case::bad_request(FailureKind::BadRequest, Some(400), false)]
+#[case::authentication(FailureKind::Authentication, Some(401), false)]
+#[case::unknown(FailureKind::Other, None, false)]
+#[case::rate_limit(FailureKind::RateLimit, Some(429), true)]
+#[case::server_error(FailureKind::InternalServer, Some(500), true)]
+#[case::connection(FailureKind::ApiConnection, None, true)]
+#[tokio::test]
+async fn transient_only_recovery_applies_before_fallback(
+    config: RouterConfig,
+    #[case] kind: FailureKind,
+    #[case] status: Option<u16>,
+    #[case] expected_fallback: bool,
+) {
+    let host = Arc::new(ScriptedHost::failing(
+        "primary",
+        vec![AttemptError::new(kind, status)],
+    ));
+    let router = router(
+        RouterConfig {
+            fallback_on_transient_errors_only: Some(true),
+            ..config
+        },
+        json!({"num_retries": 0, "fallbacks": [{"primary": ["backup"]}]}),
+        host,
+    );
+    let result = router.call(Op::from("acompletion"), request()).await;
+    if expected_fallback {
+        assert_eq!(result.unwrap().deployment_id, "b1");
+    } else {
+        assert!(matches!(result, Err(Error::Attempt(error)) if error.kind == kind));
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn transient_only_recovery_stops_the_chain_on_a_permanent_error() {
+    let host = Arc::new(ScriptedHost {
+        script: Mutex::new(vec![
+            ("primary".into(), VecDeque::from([server_error()])),
+            (
+                "backup".into(),
+                VecDeque::from([failure(FailureKind::Authentication, 401)]),
+            ),
+        ]),
+        ..ScriptedHost::default()
+    });
+    let router = router(
+        RouterConfig {
+            fallback_on_transient_errors_only: Some(true),
+            ..tiers(false)
+        },
+        json!({"num_retries": 0, "fallbacks": [{"primary": ["backup", "context"]}]}),
+        host.clone(),
+    );
+    let result = router.call(Op::from("acompletion"), request()).await;
+    assert!(matches!(result, Err(Error::Attempt(error)) if error.status == Some(401)));
+    assert_eq!(host.selected().len(), 2);
+}
+
+#[rstest]
 #[tokio::test]
 async fn a_rate_limit_cools_the_deployment_down(config: RouterConfig) {
     let host = Arc::new(ScriptedHost::failing(
@@ -892,6 +952,40 @@ fn stream_request() -> RouterRequest {
         num_retries: Some(3),
         ..request()
     }
+}
+
+#[rstest]
+#[tokio::test]
+async fn transient_only_recovery_preserves_permanent_stream_errors(config: RouterConfig) {
+    let host = Arc::new(ScriptedHost::default());
+    let router = router(
+        RouterConfig {
+            fallback_on_transient_errors_only: Some(true),
+            retry_policy: Some(litellm_router_core::config::RetryPolicy {
+                BadRequestErrorRetries: Some(2),
+                ..Default::default()
+            }),
+            ..config
+        },
+        json!({"fallbacks": [{"primary": ["backup"]}]}),
+        host.clone(),
+    );
+    let failed = failure(FailureKind::BadRequest, 400);
+    let op = Op::from("acompletion");
+    let result = router
+        .retry_stream(
+            op.clone(),
+            stream_request(),
+            stream_origin(),
+            failed.clone(),
+        )
+        .await;
+    assert!(matches!(result, Err(Error::Attempt(error)) if error.status == Some(400)));
+    let result = router
+        .fallback_stream(op, stream_request(), stream_origin(), failed)
+        .await;
+    assert!(matches!(result, Err(Error::Attempt(error)) if error.status == Some(400)));
+    assert_eq!(host.selected().len(), 0);
 }
 
 #[rstest]

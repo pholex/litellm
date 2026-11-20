@@ -26,7 +26,7 @@ use crate::{
     outcome::{OutcomeCallbacks, OutcomeWrite},
     prerouting::{PreRoute, PreRouted},
     registry::{ResolveKind, ResolveScope},
-    retry::{RetryContext, resolve_retry_policy, should_retry},
+    retry::{RetryContext, is_transient, resolve_retry_policy, should_retry},
     select::{Candidates, SelectInputs},
 };
 
@@ -283,6 +283,11 @@ fn retried_failure(error: &Error) -> Option<Cow<'_, AttemptError>> {
     }
 }
 
+fn stops_recovery(snapshot: &RouterStateSnapshot, error: &Error) -> bool {
+    snapshot.settings.fallback_on_transient_errors_only
+        && retried_failure(error).is_none_or(|failure| !is_transient(&failure))
+}
+
 impl Core {
     pub(crate) async fn call(
         &self,
@@ -419,6 +424,7 @@ impl Core {
                 .await
             {
                 Ok(response) => return Ok(response),
+                Err(Some(raised)) if stops_recovery(snapshot, &raised) => return Err(raised),
                 Err(raised) if defers_to_regular_fallbacks(raised.as_ref().unwrap_or(&error)) => {}
                 // Outside the `try` around the regular fallbacks: the level raises it as it is.
                 Err(raised) => {
@@ -443,6 +449,7 @@ impl Core {
             .await
         {
             Ok(response) => return Ok(response),
+            Err(Some(raised)) if stops_recovery(snapshot, &raised) => return Err(raised),
             Err(raised) => raised,
         };
         if !order_path {
@@ -650,6 +657,7 @@ impl Core {
                         response.attempted_fallbacks = hop;
                         return Ok(response);
                     }
+                    Err(raised) if stops_recovery(snapshot, &raised) => return Err(Some(raised)),
                     Err(raised) => last_hop_error = Some(raised),
                 }
             }
@@ -730,7 +738,7 @@ impl Core {
         request: &RouterRequest,
         error: &Error,
     ) -> bool {
-        if request.disable_fallbacks {
+        if request.disable_fallbacks || stops_recovery(snapshot, error) {
             return true;
         }
         // Python decides by the exception alone, so a pick's error falls back like an attempt's:
@@ -942,6 +950,9 @@ impl Core {
                 served_as: None,
             });
         }
+        if stops_recovery(snapshot, &failed.error) {
+            return Err(failed);
+        }
         let Some(first_failure) = retried_failure(&failed.error) else {
             return Err(failed);
         };
@@ -1007,7 +1018,10 @@ impl Core {
             let Some(failure) = retried_failure(&failed.error) else {
                 return Err(failed);
             };
-            if !policy_applies && !self.should_retry(snapshot, request, &failure, healthy, all) {
+            if (settings.fallback_on_transient_errors_only && !is_transient(&failure))
+                || (!policy_applies
+                    && !self.should_retry(snapshot, request, &failure, healthy, all))
+            {
                 return Err(failed);
             }
             let uncounted = request.uncounted_retries.filter(|_| !policy_applies);

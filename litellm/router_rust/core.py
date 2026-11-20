@@ -361,6 +361,7 @@ _SERVED_ARGUMENTS: Final = frozenset(
         "background_health_check_model_groups",
         "enable_weighted_failover",
         "fallback_on_unsupported_params",
+        "fallback_on_transient_errors_only",
         # Built host-side as CustomLogger checks (litellm/router_rust/steps/callbacks.py); router-core runs
         # their deployment filters through its callback_filters stage.
         "optional_pre_call_checks",
@@ -3046,6 +3047,17 @@ class RustCore(
 
     # -- stream recovery (the host's stream wrappers, router_rust.invoke.streaming) ---------------------
 
+    def _classify_stream_recovery(self, failure: BaseException) -> Mapping[str, object]:
+        from litellm.exceptions import MidStreamFallbackError
+
+        if (
+            self._plain.get("fallback_on_transient_errors_only")
+            and isinstance(failure, MidStreamFallbackError)
+            and failure.original_exception is not None
+        ):
+            return attempt_failure(failure.original_exception)
+        return attempt_failure(failure)
+
     def _recovery_call(
         self,
         recovery: str,
@@ -3066,7 +3078,7 @@ class RustCore(
                 **self._outcome_fields(plan, request),
             }
         )
-        return start(op, routing, _document(origin), attempt_failure(failure))
+        return start(op, routing, _document(origin), self._classify_stream_recovery(failure))
 
     def stream_policy(
         self, request: Mapping[str, object], origin: Mapping[str, object], trigger: BaseException | None
@@ -3079,7 +3091,7 @@ class RustCore(
                 **self._retry_policy_raises(request),
             }
         )
-        kind: Final = None if trigger is None else str(attempt_failure(trigger)["kind"])
+        kind: Final = None if trigger is None else str(self._classify_stream_recovery(trigger)["kind"])
         return self._handle.stream_policy(routing, _document(origin), kind)
 
     async def recover_stream(

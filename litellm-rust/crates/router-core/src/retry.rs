@@ -59,6 +59,13 @@ impl RetryPolicy {
     }
 }
 
+pub(crate) fn is_transient(failure: &AttemptError) -> bool {
+    failure.is_a("APIConnectionError")
+        || failure.is_a("RouterRateLimitError")
+        || failure.is_a("RouterRateLimitErrorBasic")
+        || matches!(failure.status, Some(408 | 429 | 500..=599))
+}
+
 /// What `should_retry_this_error` knows besides the failure.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RetryContext {

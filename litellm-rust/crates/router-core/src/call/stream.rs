@@ -17,6 +17,7 @@ use crate::{
     fallback::FallbackTarget,
     health::should_retry_status,
     host::{RouterEvent, RouterRequest, UncountedRetries},
+    retry::is_transient,
     select::{Candidates, SelectInputs},
 };
 
@@ -244,7 +245,9 @@ impl Router {
         };
         let mut last = failure;
         for attempt in origin.attempted_retries..budget {
-            if last.agentic_followup {
+            if last.agentic_followup
+                || (snapshot.settings.fallback_on_transient_errors_only && !is_transient(&last))
+            {
                 break;
             }
             if !policy_applies

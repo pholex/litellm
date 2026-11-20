@@ -23,7 +23,11 @@ if TYPE_CHECKING:
 
 HEALTH_STATE_KEY: Final = DeploymentHealthCache.CACHE_KEY
 # The failover flags the Python core keeps as plain router attributes, with their defaults.
-FAILOVER_FLAGS: Final = ("enable_weighted_failover", "fallback_on_unsupported_params")
+FAILOVER_FLAGS: Final = (
+    "enable_weighted_failover",
+    "fallback_on_unsupported_params",
+    "fallback_on_transient_errors_only",
+)
 
 
 def resolved_allowed_fails_policy(value: object) -> AllowedFailsPolicy | None:
@@ -85,6 +89,7 @@ def failover_document(plain: Mapping[str, object]) -> Mapping[str, object]:
     return {
         "enable_weighted_failover": True if plain.get("enable_weighted_failover") else None,
         "fallback_on_unsupported_params": False if not plain.get("fallback_on_unsupported_params", True) else None,
+        "fallback_on_transient_errors_only": True if plain.get("fallback_on_transient_errors_only") else None,
     }
 
 

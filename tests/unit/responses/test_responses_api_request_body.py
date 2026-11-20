@@ -1581,3 +1581,44 @@ async def test_router_uses_deployment_tool_allowlist_on_native_responses(
     assert "tools" not in sent
     assert "tool_choice" not in sent
     assert "allowed_tool_types" not in sent
+
+
+@pytest.mark.parametrize(("status", "allows_fallback"), [(400, False), (429, True), (503, True)])
+@pytest.mark.asyncio
+async def test_responses_router_limits_recovery_to_transient_upstream_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    status: int,
+    allows_fallback: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-nano",
+                    "api_base": f"https://{model}.tokenweave-recovery.example.test/v1",
+                    "api_key": "fake-api-key",
+                },
+            }
+            for model in ("preferred", "backup")
+        ],
+        num_retries=0,
+        fallbacks=[{"preferred": ["backup"]}],
+        fallback_on_transient_errors_only=True,
+    )
+    primary = respx_mock.post("https://preferred.tokenweave-recovery.example.test/v1/responses").mock(
+        return_value=httpx.Response(status, json={"error": {"message": "Upstream rejected the request"}}),
+    )
+    backup = respx_mock.post("https://backup.tokenweave-recovery.example.test/v1/responses").mock(
+        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_backup", "gpt-5.4-nano")),
+    )
+
+    if allows_fallback:
+        assert isinstance(await router.aresponses(model="preferred", input="hello"), ResponsesAPIResponse)
+    else:
+        with pytest.raises(litellm.BadRequestError):
+            await router.aresponses(model="preferred", input="hello")
+    assert primary.call_count == 1
+    assert backup.call_count == int(allows_fallback)

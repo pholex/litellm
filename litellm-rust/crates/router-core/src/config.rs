@@ -217,6 +217,8 @@ pub struct RouterConfig {
     pub enable_weighted_failover: bool,
     /// `fallback_on_unsupported_params`; `None` is Python's default, `True`.
     pub fallback_on_unsupported_params: Option<bool>,
+    /// Restrict retry and failover to transient failures.
+    pub fallback_on_transient_errors_only: Option<bool>,
     /// Deployment ids that are a provider's default and never cool down
     /// (`provider_default_deployment_ids`).
     pub provider_default_deployment_ids: Vec<String>,

@@ -37,6 +37,7 @@ PLAIN_DEFAULTS: Final[Mapping[str, object]] = MappingProxyType(
         "model_group_retry_policy": {},
         "enable_weighted_failover": False,
         "fallback_on_unsupported_params": True,
+        "fallback_on_transient_errors_only": False,
     }
 )
 # `get_settings`: the settings it lists, in its order (`routing_groups` comes last).
@@ -59,6 +60,7 @@ _VIEW_ORDER: Final = (
     "enable_tag_filtering",
     "tag_routing_prefix",
     "fallback_on_unsupported_params",
+    "fallback_on_transient_errors_only",
 )
 
 # Router attributes that are their constructor argument as given, else this default. Arguments

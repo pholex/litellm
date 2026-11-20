@@ -18,6 +18,12 @@
 
 验证覆盖原生 Responses、Responses 转 Chat、Rust 路由转发部署配置、Bedrock Chat 转换和空工具列表。GPT-6.2 的额外工具类型、真实 SSE 和多轮回传仍需在隔离环境验收。
 
+## Kimi Runtime 与回退规则迁移
+
+`1.110.1+tokenweave.20261120.3` 为美国版 Kimi K3.1 推理配置声明 Runtime Chat 支持工具与推理同时使用。Responses 转 Chat 复用新版上游的推理对象拆分和 custom 工具转换。签名前测试覆盖 effort 和 summary 并存、只传 summary、reasoning 为空三种请求。
+
+同版恢复 `fallback_on_transient_errors_only`。Rust 路由在重试、逐跳回退和流式恢复前判断失败。跨模型回退链遇到第一个永久错误即返回该错误。Rust 核心 332 项测试通过，Python 至 Rust 路由的 400、429、503 验证通过。
+
 ## 逐提交记录
 
 | 原提交 | 功能 | 三方试合 | 候选处理 |
@@ -67,10 +73,10 @@
 | `8e1a733809` | fix(auth): isolate session tokens from stored secret ciphertext | 冲突 | 上游已有独立 bearer token 加密及同类回归。已在 `986d5d1f44` 补上无效 payload 拒绝处理，避免异常含令牌信息。 |
 | `ff7541a4b2` | feat(images): support MiniMax H3 tokens and zero-retry deployments | 冲突 | 待验证 H3 图像 token 计量、部署级价格及零重试。 |
 | `7a4047aca8` | fix(images): honor deployment token rates and edit input details | 冲突 | 待回归 edits 输入细目和每部署 token 单价。 |
-| `c8ed273ffe` | feat(bedrock): add opt-in native chat with IAM auth for Kimi K3.1 | 冲突 | 上游已有 Bedrock Runtime Chat 显式路由和认证。待核对 Kimi profile、工具、推理、计费和真实 Task Role。 |
+| `c8ed273ffe` | feat(bedrock): add opt-in native chat with IAM auth for Kimi K3.1 | 冲突 | 复用上游显式 Runtime 路由和认证，补齐 Kimi 工具与推理同时使用时的路由判定。真实 Task Role 和计费待验。 |
 | `caa65acc16` | fix(tools): reconcile filtered tool choices and normalize empty tools | 冲突 | 待与白名单统一迁移。旧版本号、旧锁文件和旧历史验收结果不作为新版改动复用。 |
-| `5aecdc24c9` | fix(bedrock): normalize Responses reasoning objects for Runtime chat | 冲突 | 待验证 Kimi reasoning 对象、summary-only、null、流式和工具请求。 |
-| `42fae568bb` | fix(router): restrict recovery to transient errors when configured | 冲突 | 新版生产路由已重构到 Rust 路由栈，同名开关未见。需移植错误分类及流式/多跳恢复策略。 |
+| `5aecdc24c9` | fix(bedrock): normalize Responses reasoning objects for Runtime chat | 冲突 | Kimi reasoning 对象、summary-only、null 与 custom 工具已通过签名前测试。流式与回传待实测。 |
+| `42fae568bb` | fix(router): restrict recovery to transient errors when configured | 冲突 | 已移植至 Rust 路由栈，覆盖错误分类、流式恢复与多跳回退。 |
 | `cfa57398a6` | fix(bedrock): forward GPT-6.2 Converse reasoning effort | 冲突 | 新版 Converse 已支持 OpenAI GPT 家族 reasoning.effort 的字符串映射。待验证 fork 的精确模型 ID、字典输入及开启工具时的 wire payload。 |
 | `355a81837d` | feat(responses): bridge Codex tools to Bedrock Converse | 冲突 | 新版已有部分 namespace、custom 与 tool_search 支持。待验证 Converse 的 namespace、补丁、旧 Shell、工具搜索、结果回传及 SSE 双向语义。 |
 | `384df3b130` | fix(responses): preserve tool search SDK compatibility | 冲突 | 待随 Converse 工具迁移核对 OpenAI SDK 对不同 tool_search input/output 形状的处理。 |

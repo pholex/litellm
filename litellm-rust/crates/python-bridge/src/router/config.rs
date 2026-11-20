@@ -40,6 +40,7 @@ const STATIC_KEYS: &[&str] = &[
     "background_health_check_model_groups",
     "enable_weighted_failover",
     "fallback_on_unsupported_params",
+    "fallback_on_transient_errors_only",
     "provider_default_deployment_ids",
 ];
 
