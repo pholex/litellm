@@ -7,6 +7,7 @@ from litellm.main import stream_chunk_builder
 from litellm.responses.litellm_completion_transformation.custom_tool_bridge import (
     CustomToolStreamRewriter,
 )
+from litellm.responses.litellm_completion_transformation.native_tool_bridge import ToolBinding
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
@@ -61,11 +62,14 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         custom_llm_provider: Optional[str] = None,
         litellm_metadata: Optional[dict] = None,
         custom_tool_names: Optional[Set[str]] = None,
+        native_tool_bindings: Optional[dict[str, ToolBinding]] = None,
     ):
         # bridge_custom_tools_as_functions: rewrite function_call events of
         # Codex custom tools back into custom_tool_call items (see custom_tool_bridge).
         self._custom_tool_rewriter: Optional[CustomToolStreamRewriter] = (
-            CustomToolStreamRewriter(set(custom_tool_names)) if custom_tool_names else None
+            CustomToolStreamRewriter(custom_tool_names or set(), native_tool_bindings)
+            if custom_tool_names or native_tool_bindings
+            else None
         )
         self.model: str = model
         self.litellm_custom_stream_wrapper: litellm.CustomStreamWrapper = litellm_custom_stream_wrapper
@@ -363,10 +367,12 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             response_created_event_data["text"] = self.responses_api_request["text"]
         if "tool_choice" in self.responses_api_request:
             # Transform tool_choice from dict format (e.g., {"type": "auto"}) to string format
-            response_created_event_data["tool_choice"] = (
-                LiteLLMCompletionResponsesConfig._transform_tool_choice(self.responses_api_request["tool_choice"])
-                or "auto"
+            tool_choice = LiteLLMCompletionResponsesConfig._transform_tool_choice(
+                self.responses_api_request["tool_choice"]
             )
+            if isinstance(tool_choice, dict) and tool_choice.get("type") == "function" and tool_choice.get("function"):
+                tool_choice = {"type": "function", "name": tool_choice["function"]["name"]}
+            response_created_event_data["tool_choice"] = tool_choice or "auto"
         else:
             response_created_event_data["tool_choice"] = "auto"
         if "tools" in self.responses_api_request:
@@ -816,6 +822,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     ]:
         if self._custom_tool_rewriter is None:
             return await self._anext_bridge_event()
+        pending = self._custom_tool_rewriter.pop_pending_event()
+        if pending is not None:
+            return pending
         while True:
             event = self._custom_tool_rewriter.rewrite(await self._anext_bridge_event())
             if event is not None:
@@ -936,6 +945,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     ]:
         if self._custom_tool_rewriter is None:
             return self._next_bridge_event()
+        pending = self._custom_tool_rewriter.pop_pending_event()
+        if pending is not None:
+            return pending
         while True:
             event = self._custom_tool_rewriter.rewrite(self._next_bridge_event())
             if event is not None:

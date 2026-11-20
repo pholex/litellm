@@ -28,6 +28,8 @@ request (see its docstring).
 import json
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
+from .native_tool_bridge import ToolBinding, restore_native_tool_call
+
 INPUT_PARAM = "input"
 _PRIVATE_NAMES_KEY = "_bridge_custom_tool_names"
 
@@ -184,29 +186,38 @@ def to_custom_tool_call_item(item: Any, names: Set[str]) -> Optional[Dict[str, A
     return out
 
 
-def rewrite_output_items(output: Any, names: Set[str]) -> Any:
-    if not names or not isinstance(output, list):
+def _restore_tool_call(item: Any, names: Set[str], bindings: dict[str, ToolBinding]) -> Optional[Dict[str, Any]]:
+    custom = to_custom_tool_call_item(item, names)
+    binding = bindings.get(_get(item, "name"))
+    if binding is None or _type_str(_get(item, "type")) != "function_call":
+        return custom
+    payload = custom or (dict(item) if isinstance(item, dict) else item.model_dump(exclude_none=True))
+    return restore_native_tool_call(payload, binding)
+
+
+def rewrite_output_items(output: Any, names: Set[str], bindings: Optional[dict[str, ToolBinding]] = None) -> Any:
+    if not (names or bindings) or not isinstance(output, list):
         return output
     from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 
     new_output = []
     changed = False
     for item in output:
-        custom = to_custom_tool_call_item(item, names)
-        if custom is not None:
-            new_output.append(BaseLiteLLMOpenAIResponseObject(**custom))
+        restored = _restore_tool_call(item, names, bindings or {})
+        if restored is not None:
+            new_output.append(BaseLiteLLMOpenAIResponseObject(**restored))
             changed = True
         else:
             new_output.append(item)
     return new_output if changed else output
 
 
-def rewrite_response_object(response: Any, names: Set[str]) -> Any:
+def rewrite_response_object(response: Any, names: Set[str], bindings: Optional[dict[str, ToolBinding]] = None) -> Any:
     """In-place rewrite of a ResponsesAPIResponse (or similar) ``output`` list."""
-    if not names or response is None:
+    if not (names or bindings) or response is None:
         return response
     output = _get(response, "output")
-    new_output = rewrite_output_items(output, names)
+    new_output = rewrite_output_items(output, names, bindings)
     if new_output is not output:
         try:
             setattr(response, "output", new_output)
@@ -223,29 +234,65 @@ class CustomToolStreamRewriter:
     the event must be swallowed (argument deltas of a custom tool call).
     """
 
-    def __init__(self, names: Set[str]):
+    def __init__(self, names: Set[str], bindings: Optional[dict[str, ToolBinding]] = None):
         self.names = names
+        self.bindings = bindings or {}
         self._custom_item_ids: Set[str] = set()
+        self._pending_done_event: Any = None
+        self._sequence_offset = 0
+
+    def pop_pending_event(self) -> Any:
+        event = self._pending_done_event
+        self._pending_done_event = None
+        return event
 
     def rewrite(self, event: Any) -> Any:
-        if not self.names:
+        if not (self.names or self.bindings):
             return event
+        sequence = _get(event, "sequence_number")
+        if isinstance(sequence, int) and self._sequence_offset:
+            sequence += self._sequence_offset
+            if isinstance(event, dict):
+                event = {**event, "sequence_number": sequence}
+            else:
+                setattr(event, "sequence_number", sequence)
         etype = _type_str(_get(event, "type"))
         if etype.endswith("output_item.added") or etype.endswith("output_item.done"):
             item = _get(event, "item")
-            custom = to_custom_tool_call_item(item, self.names)
-            if custom is not None:
-                from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
-
+            binding = self.bindings.get(_get(item, "name"))
+            native_call = binding is not None and binding.namespace is None
+            if native_call or _get(item, "name") in self.names:
                 item_id = str(_get(item, "id") or _get(item, "call_id") or "")
                 if item_id:
                     self._custom_item_ids.add(item_id)
-                new_item = BaseLiteLLMOpenAIResponseObject(**custom)
+            if native_call and etype.endswith("output_item.added"):
+                # Wait for the complete action before emitting the native item pair.
+                return None
+            restored = _restore_tool_call(item, self.names, self.bindings)
+            if restored is not None:
+                from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+
+                new_item = BaseLiteLLMOpenAIResponseObject(**restored)
                 if isinstance(event, dict):
                     event = dict(event)
                     event["item"] = new_item
                 else:
                     setattr(event, "item", new_item)
+                if native_call:
+                    added_fields = {
+                        "type": "response.output_item.added",
+                        "output_index": _get(event, "output_index"),
+                        "item": BaseLiteLLMOpenAIResponseObject(**{**restored, "status": "in_progress"}),
+                    }
+                    if isinstance(sequence, int):
+                        self._sequence_offset += 1
+                        added_fields["sequence_number"] = sequence
+                        if isinstance(event, dict):
+                            event["sequence_number"] = sequence + 1
+                        else:
+                            setattr(event, "sequence_number", sequence + 1)
+                    self._pending_done_event = event
+                    return BaseLiteLLMOpenAIResponseObject(**added_fields)
             return event
         if etype.endswith("function_call_arguments.delta") or etype.endswith("function_call_arguments.done"):
             if str(_get(event, "item_id") or "") in self._custom_item_ids:
@@ -253,7 +300,7 @@ class CustomToolStreamRewriter:
             return event
         response = _get(event, "response")
         if response is not None and etype.startswith("response."):
-            rewrite_response_object(response, self.names)
+            rewrite_response_object(response, self.names, self.bindings)
         return event
 
 
@@ -264,4 +311,4 @@ def pop_custom_tool_names(kwargs: Dict[str, Any]) -> Set[str]:
 
 def stash_custom_tool_names(kwargs: Dict[str, Any], names: Set[str]) -> None:
     if names:
-        kwargs[_PRIVATE_NAMES_KEY] = sorted(names)
+        kwargs[_PRIVATE_NAMES_KEY] = sorted(names.union(kwargs.get(_PRIVATE_NAMES_KEY) or ()))

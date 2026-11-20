@@ -482,6 +482,18 @@ class LiteLLM_Proxy_MCP_Handler:
         return tool_calls
 
     @staticmethod
+    def is_mcp_only_response(response: ResponsesAPIResponse, tool_server_map: dict[str, str]) -> bool:
+        """Keep mixed client/MCP batches intact for the caller to handle."""
+        for item in response.output:
+            data = item if isinstance(item, dict) else item.model_dump(exclude_none=True)
+            kind = data.get("type")
+            if kind in ("custom_tool_call", "apply_patch_call", "local_shell_call", "tool_search_call"):
+                return False
+            if kind == "function_call" and (data.get("namespace") or data.get("name") not in tool_server_map):
+                return False
+        return True
+
+    @staticmethod
     def _extract_tool_calls_from_chat_response(response: ModelResponse) -> List[Any]:
         """Extract tool calls from a chat completion response."""
         tool_calls: List[Any] = []

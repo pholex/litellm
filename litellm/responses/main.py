@@ -303,6 +303,10 @@ async def aresponses_api_with_mcp(
     # If auto-execute tools is True, then we need to execute the tool calls
     #########################################################
     if should_auto_execute and isinstance(response, ResponsesAPIResponse):  # type: ignore
+        if kwargs.get("bridge_responses_tools_as_functions") and not LiteLLM_Proxy_MCP_Handler.is_mcp_only_response(
+            response, tool_server_map
+        ):
+            return response
         tool_calls = LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_response(response=response)
 
         if tool_calls:
@@ -932,7 +936,8 @@ def responses(
         # back to custom_tool_call items. Converted before the allowlist below so
         # drop_namespace_tools does not discard them.
         _bridge_custom_tools = bool(kwargs.get("bridge_custom_tools_as_functions"))
-        if _bridge_custom_tools and _allowed_tool_types is None:
+        _bridge_native_tools = bool(kwargs.get("bridge_responses_tools_as_functions")) and use_chat_completions_api
+        if _bridge_custom_tools and not _bridge_native_tools and _allowed_tool_types is None:
             from litellm.responses.litellm_completion_transformation.custom_tool_bridge import (
                 convert_custom_tools_request,
                 stash_custom_tool_names,
@@ -972,7 +977,7 @@ def responses(
                     if _relocated_tools:
                         tools = list(tools) if tools is not None else []
                         tools.extend(_relocated_tools)
-            if _bridge_custom_tools:
+            if _bridge_custom_tools and not _bridge_native_tools:
                 from litellm.responses.litellm_completion_transformation.custom_tool_bridge import (
                     convert_custom_tools_request,
                     stash_custom_tool_names,
@@ -982,10 +987,9 @@ def responses(
                 local_vars["input"] = input
                 stash_custom_tool_names(kwargs, _custom_names)
             if tools is not None:
-                tools = filter_tools_by_allowed_types(
-                    tools=list(tools), allowed_tool_types=_allowed_tool_types
-                )
-                tool_choice = reconcile_tool_choice_after_tool_filtering(tool_choice, tools)
+                tools = filter_tools_by_allowed_types(tools=list(tools), allowed_tool_types=_allowed_tool_types)
+                if not _bridge_native_tools:
+                    tool_choice = reconcile_tool_choice_after_tool_filtering(tool_choice, tools)
                 local_vars["tools"] = tools
                 local_vars["tool_choice"] = tool_choice
 
@@ -1168,11 +1172,25 @@ def responses(
             extra_body=extra_body,
             timeout=timeout,
             custom_llm_provider=custom_llm_provider,
-            kwargs=kwargs,
+            kwargs={**kwargs, "use_chat_completions_api": True} if _bridge_native_tools else kwargs,
             _is_async=_is_async,
         )
         if _mcp_dispatch is not None:
             return _mcp_dispatch
+
+        if _bridge_native_tools:
+            from litellm.responses.litellm_completion_transformation.native_tool_bridge import convert_native_tools
+            from litellm.responses.litellm_completion_transformation.custom_tool_bridge import (
+                convert_custom_tools_request,
+                stash_custom_tool_names,
+            )
+
+            tools, input, tool_choice, bindings = convert_native_tools(list(tools or ()), input, tool_choice)
+            tools, input, custom_names = convert_custom_tools_request(tools, input)
+            stash_custom_tool_names(kwargs, custom_names)
+            tool_choice = reconcile_tool_choice_after_tool_filtering(tool_choice, tools)
+            local_vars.update(tools=tools or None, input=input, tool_choice=tool_choice)
+            kwargs["_bridge_native_tool_bindings"] = bindings
 
         # get provider config
         responses_api_provider_config: Optional[BaseResponsesAPIConfig]
