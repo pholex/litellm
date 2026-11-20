@@ -155,6 +155,30 @@ def _provider_mapped_params(
     return config.map_openai_params(response_api_optional_params=params, model=model, drop_params=drop_params)
 
 
+def _input_content_without_logprobs(part: object) -> object:
+    if not isinstance(part, Mapping) or part.get("type") != "output_text" or "logprobs" not in part:
+        return part
+    return {key: value for key, value in part.items() if key != "logprobs"}
+
+
+def _input_item_without_logprobs(item: object) -> object:
+    if not isinstance(item, Mapping) or not isinstance(content := item.get("content"), list):
+        return item
+    parts: Final = [_input_content_without_logprobs(part) for part in content]
+    if all(original is sanitized for original, sanitized in zip(content, parts, strict=True)):
+        return item
+    return {**item, "content": parts}
+
+
+def strip_input_logprobs(input: str | ResponseInputParam) -> str | ResponseInputParam:
+    if not isinstance(input, list):
+        return input
+    items: Final = [_input_item_without_logprobs(item) for item in input]
+    if all(original is sanitized for original, sanitized in zip(input, items, strict=True)):
+        return input
+    return cast(ResponseInputParam, items)  # cast-ok: only a response-only field is removed
+
+
 class ResponsesAPIRequestUtils:
     """Helper utils for constructing ResponseAPI requests"""
 

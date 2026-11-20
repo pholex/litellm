@@ -68,7 +68,7 @@ from litellm.responses.mcp.round_billing import (
     summed_cost_breakdown,
 )
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
-from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.responses.utils import ResponsesAPIRequestUtils, strip_input_logprobs
 from litellm.types.llms.openai import (
     PromptObject,
     Reasoning,
@@ -1580,6 +1580,8 @@ def responses(
             local_vars=local_vars,
             use_chat_completions_api=use_chat_completions_api,
         )
+        input = strip_input_logprobs(input)  # rebind-ok: sanitize replayed input after prompt management
+        local_vars["input"] = input
         litellm_logging_obj.record_agentic_loop_params(AgenticLoopParams(model=model))
 
         from litellm.litellm_core_utils.core_helpers import attribute_or_none

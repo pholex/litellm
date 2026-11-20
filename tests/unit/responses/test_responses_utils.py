@@ -1,6 +1,6 @@
 from importlib import import_module
 import base64
-from typing import Final
+from typing import Final, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -10,10 +10,33 @@ import litellm
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
-from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
-from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
+from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils, strip_input_logprobs
+from litellm.types.llms.openai import (
+    ResponseAPIUsage,
+    ResponseInputParam,
+    ResponsesAPIOptionalRequestParams,
+    ResponsesAPIResponse,
+)
 from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import _invalidate_model_cost_lowercase_map
+
+
+def test_responses_history_drops_output_text_logprobs_without_mutating_request() -> None:
+    output_text: Final = {"type": "output_text", "text": "Hello", "annotations": [], "logprobs": []}
+    request_input: Final = cast(
+        ResponseInputParam,
+        [{"type": "message", "role": "assistant", "id": "msg_1", "content": [output_text]}],
+    )  # cast-ok: reproduce a client replaying an out-of-schema response-only field
+
+    assert strip_input_logprobs(request_input) == [
+        {
+            "type": "message",
+            "role": "assistant",
+            "id": "msg_1",
+            "content": [{"type": "output_text", "text": "Hello", "annotations": []}],
+        }
+    ]
+    assert output_text["logprobs"] == []
 
 
 class TestResponsesAPIRequestUtils:
