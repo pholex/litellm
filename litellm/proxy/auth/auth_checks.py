@@ -4195,8 +4195,8 @@ class ExperimentalUIJWTToken:
             return None
         try:
             return UserAPIKeyAuth.model_validate(json.loads(decrypted_token))
-        except Exception as e:
-            raise Exception(f"Invalid hash key. Hash key={hashed_token}. Decrypted token={decrypted_token}. Error: {e}")
+        except (ValueError, TypeError):
+            return None
 
 
 async def fetch_key_object_from_db_with_reconnect(

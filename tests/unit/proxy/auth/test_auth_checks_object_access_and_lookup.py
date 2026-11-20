@@ -88,7 +88,7 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import check_api_key_for_custom_headers_or_pass_through_endpoints
 from litellm.proxy.utils import ProxyLogging
 from litellm.proxy import proxy_server
-from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_bearer_token, encrypt_value_helper
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_bearer_token, encrypt_bearer_token, encrypt_value_helper
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from prisma.errors import DataError
 from litellm.proxy.common_utils.user_api_key_cache import (
@@ -303,6 +303,13 @@ def test_get_key_object_from_ui_hash_key_accepts_only_minted_session_tokens(
     reshaped = LITELLM_SESSION_TOKEN_PREFIX + stored_value.removeprefix("v2:gcm:").rstrip("=")
     for candidate in (stored_value, reshaped):
         assert ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(candidate) is None
+
+
+@pytest.mark.parametrize("payload", ["not json", "[]"])
+def test_get_key_object_from_ui_hash_key_rejects_invalid_session_payload(payload: str) -> None:
+    token: Final = encrypt_bearer_token(payload, prefix=LITELLM_SESSION_TOKEN_PREFIX)
+
+    assert ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(token) is None
 
 
 def test_session_tokens_are_header_safe_and_never_look_like_virtual_keys(valid_sso_user_defined_values):
