@@ -1320,7 +1320,10 @@ def bedrock_runtime_chat_completions_serves_tools_with_reasoning(model: str) -> 
     flag (gpt-oss, Grok). Without it AWS only takes tools with ``reasoning_effort="none"``
     (the GPT-5.6 family), and Converse serves tools with any effort, so those requests fall back to it.
     """
-    return _bedrock_price_map_flag(model, "supports_bedrock_runtime_chat_completions_tools_with_reasoning")
+    model_id: Final = split_bedrock_region_path(model)[1]
+    return model_id == "us.moonshotai.kimi-k3.1" or _bedrock_price_map_flag(
+        model, "supports_bedrock_runtime_chat_completions_tools_with_reasoning"
+    )
 
 
 def bedrock_runtime_chat_completions_enforces_response_format(model: str) -> bool:

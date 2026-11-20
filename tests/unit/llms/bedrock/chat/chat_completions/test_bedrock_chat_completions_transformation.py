@@ -1075,6 +1075,51 @@ def test_gpt_oss_completion_hits_chat_completions_and_splits_reasoning(local_cos
     assert response.choices[0].message.content == "Hi"
 
 
+@pytest.mark.parametrize(
+    ("reasoning", "expected_effort"),
+    [({"effort": "low", "summary": "auto"}, "low"), ({"summary": "auto"}, None), (None, None)],
+)
+def test_kimi_responses_bridge_signs_native_chat_with_reasoning_and_custom_tool(
+    local_cost_map, fake_aws_env, reasoning, expected_effort
+):
+    model = "us.moonshotai.kimi-k3.1"
+    tool_call = {
+        "id": "call_echo",
+        "type": "function",
+        "function": {"name": "echo_tag", "arguments": '{"content":"OK"}'},
+    }
+    requests, client = _recording_client(json=_chat_completion_json(None, model, [tool_call]))
+
+    response = litellm.responses(
+        model=f"bedrock/chat_completions/{model}",
+        input=[
+            {"role": "user", "content": "Call echo_tag"},
+            {
+                "type": "additional_tools",
+                "tools": [{"type": "custom", "name": "echo_tag", "format": {"type": "text"}}],
+            },
+        ],
+        tool_choice={"type": "custom", "name": "echo_tag"},
+        reasoning=reasoning,
+        use_chat_completions_api=True,
+        allowed_tool_types=["function"],
+        bridge_custom_tools_as_functions=True,
+        client=client,
+    )
+
+    sent = requests[0]
+    assert sent.url.path == "/openai/v1/chat/completions"
+    assert sent.headers["authorization"].startswith("AWS4-HMAC-SHA256 ")
+    body = json.loads(sent.content)
+    assert body.get("reasoning_effort") == expected_effort
+    assert "reasoning_summary" not in body
+    assert body["tools"][0]["function"]["name"] == "echo_tag"
+    assert body["tool_choice"] == {"type": "function", "function": {"name": "echo_tag"}}
+    assert [(item.type, item.name, item.input) for item in response.output] == [
+        ("custom_tool_call", "echo_tag", "OK"),
+    ]
+
+
 def test_gpt56_tools_with_reasoning_effort_go_to_converse(local_cost_map, fake_aws_env):
     requests, client = _recording_client(json=CONVERSE_JSON)
     response = litellm.completion(
