@@ -10,7 +10,7 @@
 
 使用锁定的 Python 3.13 依赖，从候选源码成功构建上游 Rust 扩展。Seedance、Responses 工具和历史、模型列表、会话认证、MiniMax 视频及 Bedrock 转换共 1,612 个不同的单元测试通过。其中一个自签名 vLLM 模型列表用例在默认沙箱中因不能绑定本地端口失败，在允许本地端口后单独通过。Python 语法检查、变更行 Ruff 检查与 `git diff --check` 通过。
 
-这些测试没有调用线上模型或数据库。现有 ECS 配置显式使用 `allowed_tool_types`、`drop_foreign_reasoning_items` 与 `fallback_on_transient_errors_only`，还需逐项确认新路由的实际生效条件。候选保留上游包版本 `1.110.1`，待迁移完成后再更新 fork 版本和锁文件。候选分支仅在本地，未推送或部署。
+这些测试没有调用线上模型或数据库。现有 ECS 配置显式使用 `allowed_tool_types`、`drop_foreign_reasoning_items` 与 `fallback_on_transient_errors_only`，还需逐项确认新路由的实际生效条件。首个隔离测试构建使用 `1.110.1+tokenweave.20261120.1`。该版本用于建立镜像及数据库启动基线，功能迁移进度见下表。
 
 ## 逐提交记录
 
