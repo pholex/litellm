@@ -4,9 +4,8 @@ import hashlib
 import json
 from dataclasses import dataclass
 
-from openai.types.responses import ResponseApplyPatchToolCall, ResponseToolSearchCall
+from openai.types.responses import ResponseApplyPatchToolCall
 from openai.types.responses.response_input_item import LocalShellCall
-from pydantic import ValidationError
 
 
 @dataclass(frozen=True)
@@ -195,9 +194,9 @@ def restore_native_tool_call(item: dict, binding: ToolBinding) -> dict:
                 {**base, "type": "local_shell_call", "action": {"env": {}, **arguments, "type": "exec"}}
             )
         else:
-            call = ResponseToolSearchCall.model_validate(
-                {**base, "type": "tool_search_call", "execution": "client", "arguments": arguments}
-            )
+            if not base["id"]:
+                raise ValueError("Tool search requires a call identifier")
+            return {**base, "type": "tool_search_call", "execution": "client", "arguments": arguments}
         return call.model_dump(exclude_none=True)
-    except (ValueError, ValidationError):
+    except ValueError:
         raise ValueError(f"Invalid arguments for the bridged {binding.kind} tool call") from None
