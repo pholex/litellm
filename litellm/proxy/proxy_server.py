@@ -536,6 +536,7 @@ from litellm.proxy.common_utils.custom_openapi_spec import JsonObject
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
 from litellm.proxy.common_utils.discoverable_model_filter import (
+    configured_hidden_model_names,
     discoverable_rows,
     undiscoverable_model_groups,
     undiscoverable_model_names,
@@ -12682,7 +12683,9 @@ async def _listing_hidden_names(healthy_only: bool | None) -> frozenset[str]:
         general_settings=general_settings_view(),
         llm_router=llm_router,
     )
-    return frozenset(blocked_names | unhealthy_names)
+    return frozenset(
+        blocked_names | unhealthy_names | configured_hidden_model_names(llm_router) | {SpecialModelNames.all_proxy_models.value}
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -13083,13 +13086,7 @@ async def model_info(
     # Mirror /v1/models' visibility filter so first-occurrence resolution
     # cannot land on a deployment the listing had hidden. Undiscoverable
     # models stay retrievable by id, they only drop out of the alias guard.
-    blocked_names: Final = llm_router.health().fully_blocked_model_names() if llm_router is not None else set[str]()
-    unhealthy_names: Final = await get_hidden_unhealthy_model_names(
-        healthy_only=healthy_only,
-        general_settings=settings,
-        llm_router=llm_router,
-    )
-    hidden_names: Final = blocked_names | unhealthy_names
+    hidden_names: Final = await _listing_hidden_names(healthy_only)
     internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, settings)
     caller_aliases: Final = await request_caller_aliases(user_api_key_dict, team_id)
     callback_hidden_names: Final = await _names_hidden_by_listing_callbacks(

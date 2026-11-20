@@ -4,11 +4,14 @@ listing endpoints: a deployment marked `model_info: {discoverable: false}` is
 hidden from listings for callers without the admin view while it still routes.
 """
 
+from typing import Final
+
 import pytest
 
 from litellm import Router
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.common_utils.discoverable_model_filter import (
+    configured_hidden_model_names,
     discoverable_rows,
     undiscoverable_model_names,
 )
@@ -32,6 +35,22 @@ def _non_admin() -> UserAPIKeyAuth:
 
 def _admin(role: LitellmUserRoles = LitellmUserRoles.PROXY_ADMIN) -> UserAPIKeyAuth:
     return UserAPIKeyAuth(api_key="sk-test", user_role=role)
+
+
+def test_configured_listing_hides_fallback_and_fully_opted_in_model_groups() -> None:
+    router: Final = _router(
+        _deployment("internal-fallback"),
+        _deployment("hidden", hide_from_model_list=True),
+        _deployment("visible"),
+        _deployment("mixed", hide_from_model_list=True),
+        {
+            "model_name": "mixed",
+            "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-fake"},
+            "model_info": {"id": "mixed-public"},
+        },
+    )
+
+    assert configured_hidden_model_names(router) == {"internal-fallback", "hidden"}
 
 
 def test_flagged_model_is_undiscoverable_for_non_admin():

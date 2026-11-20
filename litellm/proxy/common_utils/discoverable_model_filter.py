@@ -16,6 +16,25 @@ if TYPE_CHECKING:
 _PATTERN_DEPLOYMENTS: Final = TypeAdapter(Mapping[str, tuple[Mapping[str, object], ...]])
 
 
+def configured_hidden_model_names(llm_router: Router | None) -> frozenset[str]:
+    if llm_router is None:
+        return frozenset()
+    registry: Final = llm_router.registry()
+    return frozenset(
+        name
+        for name in registry.names()
+        if name.endswith("-fallback") or _all_deployments_hide_from_listing(registry.deployments(name))
+    )
+
+
+def _all_deployments_hide_from_listing(deployments: Iterable[Mapping[str, object]] | None) -> bool:
+    rows: Final = tuple(deployments or ())
+    return bool(rows) and all(
+        isinstance(info := deployment.get("model_info"), Mapping) and info.get("hide_from_model_list") is True
+        for deployment in rows
+    )
+
+
 def is_undiscoverable_deployment(deployment: Mapping[str, object]) -> bool:
     model_info: Final = deployment.get("model_info")
     if not isinstance(model_info, Mapping):
