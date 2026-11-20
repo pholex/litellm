@@ -849,6 +849,10 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             LiteLLM_Proxy_MCP_Handler,
         )
 
+        if self.original_request_params.get("bridge_responses_tools_as_functions") is True:
+            if LiteLLM_Proxy_MCP_Handler.has_client_tool_calls(self.collected_response, self.tool_server_map):
+                return
+
         try:
             # Extract tool calls from the response
             if self.collected_response is not None:

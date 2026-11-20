@@ -2085,6 +2085,7 @@ class MCPServerManager:
         self._listed_tools_by_server_id: dict[str, _ListedToolsByCaller] = {}  # mutable-ok: refreshed per tools/list
         self._listed_tools_generations: dict[str, int] = {}  # mutable-ok: bumped per server save
         self._upstream_initialize_instructions_by_server_id: dict[str, str] = {}
+        self._upstream_server_versions: dict[str, str] = {}
         # Per-server monotonic timestamp of last upstream prefetch attempt (success,
         # empty result, or failure). Used to throttle re-probes for servers that do
         # not return instructions, and to apply a short cooldown after failures.
@@ -2462,7 +2463,16 @@ class MCPServerManager:
         if raw and str(raw).strip():
             self._upstream_initialize_instructions_by_server_id[server.server_id] = str(raw).strip()
 
-    async def ensure_upstream_initialize_instructions_cached(self, server: MCPServer) -> None:
+        version: Final = getattr(client, "last_initialize_server_version", None)
+        if isinstance(version, str) and version:
+            self._upstream_server_versions[server.server_id] = version
+
+    def upstream_server_version(self, server_id: str) -> str | None:
+        return self._upstream_server_versions.get(server_id)
+
+    async def ensure_upstream_initialize_instructions_cached(
+        self, server: MCPServer, *, include_version: bool = False
+    ) -> None:
         """
         Open one upstream session and cache InitializeResult.instructions if missing.
 
@@ -2481,9 +2491,11 @@ class MCPServerManager:
         """
         if server.spec_path:
             return
-        if server.instructions and server.instructions.strip():
-            return
-        if self._upstream_initialize_instructions_by_server_id.get(server.server_id):
+        has_instructions: Final = bool(
+            (server.instructions and server.instructions.strip())
+            or self._upstream_initialize_instructions_by_server_id.get(server.server_id)
+        )
+        if has_instructions and (not include_version or self.upstream_server_version(server.server_id) is not None):
             return
         if server.requires_per_user_auth:
             return
@@ -2571,6 +2583,7 @@ class MCPServerManager:
         """
         verbose_logger.debug("Loading MCP Servers from config-----")
         self._upstream_initialize_instructions_by_server_id.clear()
+        self._upstream_server_versions.clear()
         self._upstream_initialize_instructions_probed_at.clear()
 
         # Track which aliases have been used to ensure only first occurrence is used
@@ -4664,10 +4677,12 @@ class MCPServerManager:
 
     def clear_initialize_instructions(self) -> None:
         self._upstream_initialize_instructions_by_server_id.clear()
+        self._upstream_server_versions.clear()
         self._upstream_initialize_instructions_probed_at.clear()
 
     def invalidate_discovery_lists(self, server_id: str) -> None:
         self._upstream_initialize_instructions_by_server_id.pop(server_id, None)
+        self._upstream_server_versions.pop(server_id, None)
         self._upstream_initialize_instructions_probed_at.pop(server_id, None)
         self._prompt_discovery_cache.invalidate(server_id)
         self._resource_discovery_cache.invalidate(server_id)

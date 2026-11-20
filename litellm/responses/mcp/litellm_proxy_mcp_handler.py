@@ -625,6 +625,19 @@ class LiteLLM_Proxy_MCP_Handler:
     _extract_tool_calls_from_response = extract_tool_calls_from_response
 
     @staticmethod
+    def has_client_tool_calls(response: ResponsesAPIResponse, tool_server_map: Mapping[str, object]) -> bool:
+        for item in response.output:
+            kind = item.get("type") if isinstance(item, Mapping) else item.type
+            if kind in {"custom_tool_call", "apply_patch_call", "local_shell_call", "tool_search_call"}:
+                return True
+            if kind == "function_call":
+                name = item.get("name") if isinstance(item, Mapping) else getattr(item, "name", None)
+                namespace = item.get("namespace") if isinstance(item, Mapping) else getattr(item, "namespace", None)
+                if namespace or not isinstance(name, str) or name not in tool_server_map:
+                    return True
+        return False
+
+    @staticmethod
     def _continued_choice(response: ModelResponse) -> Choices | None:
         choices: Final = tuple(choice for choice in response.choices if isinstance(choice, Choices))
         return next((choice for choice in choices if choice.message.tool_calls), next(iter(choices), None))

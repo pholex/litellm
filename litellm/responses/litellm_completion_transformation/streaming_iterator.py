@@ -19,6 +19,11 @@ from litellm.responses.litellm_completion_transformation.custom_tools import (
     is_custom_tool_call,
     serialize_tool_call_arguments,
 )
+from litellm.responses.litellm_completion_transformation.native_tools import (
+    native_tool_bridge_enabled,
+    native_tool_kind,
+    native_tool_output,
+)
 from litellm.responses.litellm_completion_transformation.reasoning_items import mint_reasoning_item_id
 from litellm.responses.litellm_completion_transformation.tool_search import (
     ToolSearchExecution,
@@ -233,6 +238,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._accumulated_reasoning_content_parts: list[str] = []
         self._accumulated_provider_specific_fields: dict[str, object] = {}
         request_tools: Final = self.responses_api_request.get("tools")
+        self._native_response_tools = (
+            request_tools if native_tool_bridge_enabled(responses_api_request) else None
+        )
+        self._native_tool_call_ids: set[str] = set()  # mutable-ok: tracks fragmented streamed native tool calls
         self._custom_tool_names: set[str] = extract_custom_tool_names(request_tools)
         self._custom_tool_call_ids: set[str] = set()  # mutable-ok: ids for fragmented custom tool calls
         self._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(request_tools)
@@ -504,6 +513,12 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 self._queue_tool_search_call_added(call_id, output_index, fn_args_delta, search_execution)
                 continue
             self._started_tool_call = True
+            if native_tool_bridge_enabled(self.responses_api_request):
+                if native_tool_kind(fn_name, self._native_response_tools) is not None:
+                    self._native_tool_call_ids.add(call_id)
+                if call_id in self._native_tool_call_ids:
+                    self._tool_args_by_call_id[call_id] = self._tool_args_by_call_id.get(call_id, "") + fn_args_delta
+                    continue
 
             if call_id not in self._tool_args_by_call_id:
                 self._tool_args_by_call_id[call_id] = ""
@@ -577,6 +592,26 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 self._queue_tool_search_call_done(call_id, output_index, fn_args, search_execution)
                 continue
             if call_id in server_tool_call_ids:
+                continue
+            native_kind = (
+                native_tool_kind(fn_name, self._native_response_tools)
+                if native_tool_bridge_enabled(self.responses_api_request)
+                else None
+            )
+            if native_kind is not None:
+                resolved_args = fn_args or self._tool_args_by_call_id.get(call_id, "")
+                if (native := native_tool_output(native_kind, call_id, resolved_args)) is not None:
+                    item = native.model_dump(exclude_none=True)
+                    self._queue_output_item_added(
+                        output_index, BaseLiteLLMOpenAIResponseObject(**{**item, "status": "in_progress"})
+                    )
+                    self._pending_tool_events.append(
+                        OutputItemDoneEvent(
+                            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+                            output_index=output_index,
+                            item=BaseLiteLLMOpenAIResponseObject(**item),
+                        )
+                    )
                 continue
 
             # Track if this is a new tool call that wasn't streamed

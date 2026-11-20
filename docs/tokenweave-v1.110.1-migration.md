@@ -40,6 +40,12 @@
 
 Gemini 图片生成和编辑都发送 Vertex 所需的 user role，转发客户端 thinkingConfig，过滤带 thought 标记的草稿图，并将单独报告的思考 token 按输出文本 token 计量。这一轮使用合成请求、响应及账单费率。
 
+## 原生客户端工具与 MCP 版本
+
+`1.110.1+tokenweave.20261120.7` 恢复部署级 `bridge_responses_tools_as_functions`。Responses 转 Chat 将 apply_patch 和 local_shell 映射为函数，重组分片后发出原生工具项目，并把客户端结果按 call ID 回传。直接代理的 OpenAI SDK 流式测试通过，使用合成上游。命名空间与客户端 tool_search 沿用新版转换，混合 MCP 调用批次保留给客户端。
+
+单服务器 MCP 路径报告上游 initialize 的 serverInfo.version，聚合路径报告网关版本。按 SDK 2 的 InitializeResult 读取 server_info，使用既有的上游会话缓存。新版 Discover 协议没有该字段时沿用网关版本。
+
 ## 逐提交记录
 
 | 原提交 | 功能 | 三方试合 | 候选处理 |
@@ -56,7 +62,7 @@ Gemini 图片生成和编辑都发送 Vertex 所需的 user role，转发客户�
 | `f9f9bab9b5` | feat(proxy): allowed_tool_types allowlist, applied on the native /responses path too | 冲突 | 新版没有同名的配置项。需要兼容旧白名单并验证原生 Responses、Chat 和桥接路径。 |
 | `e4b0e678f4` | fix(responses): relocate Codex Desktop additional_tools input items into the tools param | 冲突 | 新版自带 hoist_additional_tools，在 Chat 桥接、Mantle、Fireworks 和 Codex passthrough 调用。其余原生路由需验证。 |
 | `c99376c781` | fix(responses): drop empty additional_tools input items too | 冲突 | 新版 hoist_additional_tools 已移除空包装项。需随上一条验证实际启用条件。 |
-| `e905975b37` | feat(mcp): report upstream serverInfo.version on single-server gateway endpoints | 冲突 | MCP 模块已从 _experimental 迁移。核对单服务器 initialize 的 serverInfo.version。 |
+| `e905975b37` | feat(mcp): report upstream serverInfo.version on single-server gateway endpoints | 冲突 | 已恢复单服务器 initialize 的上游版本，覆盖缓存和聚合范围。 |
 | `ca4abfe5da` | build(docker): pin wolfi python to 3.13 so image builds match requires-python | 冲突 | 新版使用 Wolfi Python 3.13。保留新版 Dockerfile，需后续实打镜像。 |
 | `8ffca595c1` | build(docker): use uv managed CPython instead of the Wolfi apk python | 冲突 | 新版使用基镜像和包管理器提供的 Python 3.13，与旧 uv 下载路径不同。以实际镜像构建判断是否还需要补丁。 |
 | `d7e8f3deb5` | feat(responses): reasoning_summary_override litellm_param for strict Bedrock models | 冲突 | 旧配置摘要覆盖已迁移。原生 Responses 和转 Chat 都覆盖替换、删除及未请求摘要三类行为。 |
@@ -79,7 +85,7 @@ Gemini 图片生成和编辑都发送 Vertex 所需的 user role，转发客户�
 | `7da7af6507` | fix(gemini images): Vertex role, drop thought draft images, bill thoughtsTokenCount | 冲突 | 已恢复 Vertex user role、草稿图剔除及思考 token 计量，合成响应回归通过。 |
 | `8130e84bb4` | fix(gemini): map none/minimal to thinkingLevel low on gemini-3.7/3.8-flash | 冲突 | 待验证新版按模型映射 none/minimal。 |
 | `faee459f18` | fix(gemini): map xhigh/max to thinkingLevel high; keep medium on Gemini 4 | 冲突 | 待验证新版按模型映射 xhigh/max，并保留支持 medium 的模型。 |
-| `dbb95ad9bd` | feat(responses bridge): expose Codex custom tools as functions; drop empty assistant replays | 冲突 | 上游有 custom_tools.py 和 SSE 回转。待核对 Bedrock Runtime 与空 assistant 历史的覆盖。 |
+| `dbb95ad9bd` | feat(responses bridge): expose Codex custom tools as functions; drop empty assistant replays | 冲突 | 已复验 Bedrock Runtime 的 custom SSE、推理和结果回传，空 assistant 历史沿用新版转换。 |
 | `7d193f254c` | feat(completion): opt-in inline_image_urls for upstreams that reject image URLs | 冲突 | 已恢复旧配置开关，复用新版带 SSRF 检查和大小限制的下载器。端到端构造的 Chat 请求只替换远程图像链接。 |
 | `2fd65f720d` | feat: per-deployment reasoning_effort_map to rewrite unsupported efforts | 冲突 | 已恢复旧映射，Responses 转 Chat 路径只映射一次。 |
 | `1786fa921a` | feat(gemini images): pass thinkingConfig through generations and edits | 冲突 | 已恢复生成和编辑的 thinkingConfig，支持 JSON 对象及 multipart 中的 JSON 字符串。 |
@@ -95,6 +101,6 @@ Gemini 图片生成和编辑都发送 Vertex 所需的 user role，转发客户�
 | `5aecdc24c9` | fix(bedrock): normalize Responses reasoning objects for Runtime chat | 冲突 | Kimi reasoning 对象、summary-only、null 与 custom 工具已通过签名前测试。流式与回传待实测。 |
 | `42fae568bb` | fix(router): restrict recovery to transient errors when configured | 冲突 | 已移植至 Rust 路由栈，覆盖错误分类、流式恢复与多跳回退。 |
 | `cfa57398a6` | fix(bedrock): forward GPT-6.2 Converse reasoning effort | 冲突 | 新版 Converse 已支持 OpenAI GPT 家族 reasoning.effort 的字符串映射。待验证 fork 的精确模型 ID、字典输入及开启工具时的 wire payload。 |
-| `355a81837d` | feat(responses): bridge Codex tools to Bedrock Converse | 冲突 | 新版已有部分 namespace、custom 与 tool_search 支持。待验证 Converse 的 namespace、补丁、旧 Shell、工具搜索、结果回传及 SSE 双向语义。 |
-| `384df3b130` | fix(responses): preserve tool search SDK compatibility | 冲突 | 待随 Converse 工具迁移核对 OpenAI SDK 对不同 tool_search input/output 形状的处理。 |
+| `355a81837d` | feat(responses): bridge Codex tools to Bedrock Converse | 冲突 | 已迁移 apply_patch 和 local_shell。模拟上游的 OpenAI SDK 流式和回传通过。真实 Converse 复验待完成。 |
+| `384df3b130` | fix(responses): preserve tool search SDK compatibility | 冲突 | 新版客户端 tool_search 转换及历史有独立回归，需核对实际 SDK 与 Converse 烟测。 |
 | `60caa505fc` | fix(tools): skip non-mapping entries when reconciling tool choice | 冲突 | 待与新版工具白名单和 tool_choice 校正一并移植，保留防御处理。 |

@@ -460,6 +460,10 @@ async def aresponses_api_with_mcp(
     # If auto-execute tools is True, then we need to execute the tool calls
     #########################################################
     if should_auto_execute and isinstance(response, ResponsesAPIResponse):
+        if kwargs.get(
+            "bridge_responses_tools_as_functions"
+        ) is True and LiteLLM_Proxy_MCP_Handler.has_client_tool_calls(response, tool_server_map):
+            return response
         with first_round_billed_on_failure(logging_obj, response):
             tool_calls: Final = LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_response(response=response)
 
@@ -1589,6 +1593,7 @@ def responses(
         local_vars["input"] = input
         allowed_tool_types: Final = configured_tool_types(kwargs)
         bridge_custom_tools: Final = kwargs.pop("bridge_custom_tools_as_functions", False) is True
+        bridge_native_tools: Final = kwargs.pop("bridge_responses_tools_as_functions", False) is True
         if allowed_tool_types is not None:
             hoisted: Final = hoist_additional_tools(
                 input,
@@ -1815,6 +1820,7 @@ def responses(
                 extra_body=extra_body,
                 timeout=timeout if timeout is not None else request_timeout,
                 allowed_openai_params=allowed_openai_params,
+                bridge_responses_tools_as_functions=bridge_native_tools,
                 **bridge_kwargs,
             )
 

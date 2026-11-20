@@ -6721,7 +6721,7 @@ class TestGatewayCreateInitializationOptions:
             mcp_gateway_server_name.reset(server_name_token)
 
     @pytest.mark.asyncio
-    async def test_scoped_request_uses_configured_server_alias(self):
+    async def test_scoped_request_uses_configured_server_alias_and_upstream_version(self):
         try:
             from litellm.proxy.mcp_server.server import (
                 _gateway_initialize_instructions_request_scope,
@@ -6739,6 +6739,7 @@ class TestGatewayCreateInitializationOptions:
             url="https://example.com/mcp",
         )
 
+        gateway_version = server.create_initialization_options().server_version
         with (
             patch(
                 "litellm.proxy.mcp_server.operations._get_allowed_mcp_servers",
@@ -6750,6 +6751,7 @@ class TestGatewayCreateInitializationOptions:
                 "ensure_upstream_initialize_instructions_cached",
                 new_callable=AsyncMock,
             ),
+            patch.object(global_mcp_server_manager, "upstream_server_version", return_value="9.8.7"),
         ):
             async with _gateway_initialize_instructions_request_scope(
                 user_api_key_auth=None,
@@ -6758,8 +6760,16 @@ class TestGatewayCreateInitializationOptions:
                 scoped_server_endpoint=True,
             ):
                 assert server.create_initialization_options().server_name == "grafana"
+                assert server.create_initialization_options().server_version == "9.8.7"
+            async with _gateway_initialize_instructions_request_scope(
+                user_api_key_auth=None,
+                mcp_servers=None,
+                client_ip=None,
+            ):
+                assert server.create_initialization_options().server_version == gateway_version
 
         assert server.create_initialization_options().server_name == "litellm-mcp-server"
+        assert server.create_initialization_options().server_version == gateway_version
 
     @pytest.mark.asyncio
     async def test_initialize_with_no_granted_servers_returns_403(self):

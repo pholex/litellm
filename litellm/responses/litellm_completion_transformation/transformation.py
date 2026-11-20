@@ -174,6 +174,15 @@ from .custom_tools import (
     validated_tool_search_execution,
     without_malformed_tool_flags,
 )
+from .native_tools import (
+    NativeToolCall,
+    native_tool_bridge_enabled,
+    native_tool_choice,
+    native_tool_definitions,
+    native_tool_history,
+    native_tool_kind,
+    native_tool_output,
+)
 from .reasoning_items import decode_thinking_blocks, encode_thinking_blocks, mint_reasoning_item_id
 from .tool_search import (
     CompletionRoute,
@@ -1226,6 +1235,7 @@ class LiteLLMCompletionResponsesConfig:
         """
         Transform a Responses API request into a Chat Completion request
         """
+        native_bridge: Final = native_tool_bridge_enabled(responses_api_request)
         request_tools: Final = LiteLLMCompletionResponsesConfig._without_unsupported_tool_search(
             LiteLLMCompletionResponsesConfig._without_malformed_tool_flags_when_dropping_params(
                 responses_api_request.get("tools") or [], drop_params
@@ -1236,7 +1246,9 @@ class LiteLLMCompletionResponsesConfig:
         (
             converted_tools,
             web_search_options,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(request_tools)
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            native_tool_definitions(request_tools or ()) if native_bridge else request_tools
+        )
         tools: Final = LiteLLMCompletionResponsesConfig._deferral_the_route_honors(
             converted_tools, responses_api_request.get("tools"), model=model, custom_llm_provider=custom_llm_provider
         )
@@ -1268,7 +1280,7 @@ class LiteLLMCompletionResponsesConfig:
             drops_unsupported_params(request_kwargs.get("drop_params")),
             routed_model_info(request_kwargs.get("model_info")),
         )
-        request_input: Final = with_compaction_items_as_params(input)
+        request_input: Final = with_compaction_items_as_params(native_tool_history(input) if native_bridge else input)
         native_compaction: Final = _replays_compaction_block(
             request_input, context_management
         ) and provider_takes_compaction_blocks(model, custom_llm_provider)
@@ -1317,7 +1329,9 @@ class LiteLLMCompletionResponsesConfig:
             ),
             "model": model,
             "tool_choice": LiteLLMCompletionResponsesConfig._transform_tool_choice(
-                responses_api_request.get("tool_choice")
+                native_tool_choice(responses_api_request.get("tool_choice"), request_tools or ())
+                if native_bridge
+                else responses_api_request.get("tool_choice")
             ),
             "tools": tools,
             "top_p": responses_api_request.get("top_p"),
@@ -3120,7 +3134,13 @@ class LiteLLMCompletionResponsesConfig:
     def transform_chat_completion_tools_to_responses_tools(
         chat_completion_response: ModelResponse,
         responses_api_request: ResponsesAPIOptionalRequestParams | None = None,
-    ) -> list[ResponseFunctionToolCall | ResponseFunctionWebSearch | CustomToolCallOutputItem | OutputToolSearchCall]:
+    ) -> list[
+        ResponseFunctionToolCall
+        | ResponseFunctionWebSearch
+        | CustomToolCallOutputItem
+        | OutputToolSearchCall
+        | NativeToolCall
+    ]:
         """
         Transform a Chat Completion tools into a Responses API tools.
 
@@ -3141,6 +3161,9 @@ class LiteLLMCompletionResponsesConfig:
                     )
 
         request_tools: Final = responses_api_request.get("tools") if responses_api_request is not None else None
+        native_bridge: Final = (
+            responses_api_request is not None and native_tool_bridge_enabled(responses_api_request)
+        )
         custom_tool_names: Final = extract_custom_tool_names(request_tools)
         namespace_tool_names: Final = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(request_tools)
         tool_search: Final = tool_search_routing(request_tools)
@@ -3149,7 +3172,13 @@ class LiteLLMCompletionResponsesConfig:
             chat_completion_response
         )
         responses_tools: Final[
-            list[ResponseFunctionToolCall | ResponseFunctionWebSearch | CustomToolCallOutputItem | OutputToolSearchCall]
+            list[
+                ResponseFunctionToolCall
+                | ResponseFunctionWebSearch
+                | CustomToolCallOutputItem
+                | OutputToolSearchCall
+                | NativeToolCall
+            ]
         ] = []
         for tool in all_chat_completion_tools:
             if tool.type == "function":
@@ -3157,6 +3186,12 @@ class LiteLLMCompletionResponsesConfig:
                 tool_name = function_definition.name or ""
                 tool_id = tool.id or ""
                 tool_arguments = serialize_tool_call_arguments(function_definition.get("arguments"))
+
+                native_kind = native_tool_kind(tool_name, request_tools) if native_bridge else None
+                if native_kind is not None:
+                    if (native := native_tool_output(native_kind, tool_id, tool_arguments)) is not None:
+                        responses_tools.append(native)
+                    continue
 
                 if (
                     server_tool_call := LiteLLMCompletionResponsesConfig._server_tool_call_item(

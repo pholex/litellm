@@ -698,6 +698,7 @@ class TestMCPClientInstructionsCapture:
 
         await client._execute_session_operation(transport_ctx, _op)
         assert client._last_initialize_instructions == "upstream says hello"
+        assert client.last_initialize_server_version == init_result.server_info.version
 
     @pytest.mark.asyncio
     @patch("litellm.mcp_client.client.ClientSession")

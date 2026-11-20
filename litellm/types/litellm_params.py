@@ -170,6 +170,7 @@ class DispatchOptions:
     inline_image_urls: bool | None = None
     flatten_tool_schema_unions: bool | None = None
     bridge_custom_tools_as_functions: bool | None = None
+    bridge_responses_tools_as_functions: bool | None = None
     reasoning_effort_map: Mapping[str, str] | None = None
     reasoning_summary_override: str | None = None
 

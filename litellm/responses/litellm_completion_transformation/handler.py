@@ -5,7 +5,7 @@ Handler for transforming responses api requests to litellm.completion requests
 from collections.abc import Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final
+from typing import Final, cast
 
 from pydantic import TypeAdapter
 
@@ -85,12 +85,20 @@ class LiteLLMCompletionTransformationHandler:
         _is_async: bool = False,
         stream: bool | None = None,
         extra_headers: Mapping[str, object] | None = None,
+        bridge_responses_tools_as_functions: bool = False,
         **kwargs,
     ) -> (
         ResponsesAPIResponse
         | BaseResponsesAPIStreamingIterator
         | Coroutine[object, object, ResponsesAPIResponse | BaseResponsesAPIStreamingIterator]
     ):
+        request: Final[ResponsesAPIOptionalRequestParams] = (
+            cast(  # cast-ok: internal bridge flag consumed before provider serialization
+                ResponsesAPIOptionalRequestParams, {**responses_api_request, "_bridge_native_tools": True}
+            )
+            if bridge_responses_tools_as_functions
+            else responses_api_request
+        )
         hoisted: Final = hoist_additional_tools(
             input,
             responses_api_request.get("tools"),
@@ -104,13 +112,13 @@ class LiteLLMCompletionTransformationHandler:
                 hoisted,
                 model=model,
                 caller_input=input,
-                responses_api_request=responses_api_request,
+                responses_api_request=request,
                 custom_llm_provider=custom_llm_provider,
                 stream=stream,
                 extra_headers=extra_headers,
                 request_kwargs=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
             )
-        bridged: Final = _bridged_request(hoisted, responses_api_request, ())
+        bridged: Final = _bridged_request(hoisted, request, ())
         bridged_input: Final = bridged.input
         bridged_request: Final = bridged.responses_api_request
         litellm_completion_request: Final[dict] = {

@@ -68,6 +68,7 @@ from litellm.proxy.mcp_server.mcp_context import (  # noqa: F401  # legacy modul
     mcp_active_toolset_id,
     mcp_gateway_initialize_instructions,
     mcp_gateway_server_name,
+    mcp_gateway_server_version,
 )
 from litellm.proxy.mcp_server.mcp_debug import (
     MCP_AUTH_DIAGNOSTICS_SCOPE_KEY,
@@ -639,6 +640,9 @@ if MCP_AVAILABLE:
         scoped_server_name: Final = mcp_gateway_server_name.get()
         if scoped_server_name is not None:
             updates["server_name"] = scoped_server_name
+        scoped_version: Final = mcp_gateway_server_version.get()
+        if scoped_version is not None:
+            updates["server_version"] = scoped_version
         return opts.model_copy(update=updates) if updates else opts
 
     ########################################################
@@ -1224,7 +1228,9 @@ if MCP_AVAILABLE:
             # cancel sibling probes or 500 the gateway initialize request.
             await asyncio.gather(
                 *[
-                    operations.global_mcp_server_manager.ensure_upstream_initialize_instructions_cached(s)
+                    operations.global_mcp_server_manager.ensure_upstream_initialize_instructions_cached(
+                        s, include_version=scoped_server_endpoint and len(allowed) == 1
+                    )
                     for s in allowed
                     if s is not None
                 ],
@@ -1232,18 +1238,22 @@ if MCP_AVAILABLE:
             )
         merged: Final = operations._merge_gateway_initialize_instructions(allowed_mcp_servers=allowed)
         scoped_server_name = None
+        scoped_version = None
         if scoped_server_endpoint and len(allowed) == 1:
             scoped_server: Final = allowed[0]
             scoped_server_name = (
                 scoped_server.alias or scoped_server.server_name or scoped_server.name or scoped_server.server_id
             )
+            scoped_version = operations.global_mcp_server_manager.upstream_server_version(scoped_server.server_id)
         instructions_token: Final = mcp_gateway_initialize_instructions.set(merged)
         server_name_token: Final = mcp_gateway_server_name.set(scoped_server_name)
+        server_version_token: Final = mcp_gateway_server_version.set(scoped_version)
         try:
             yield
         finally:
             mcp_gateway_initialize_instructions.reset(instructions_token)
             mcp_gateway_server_name.reset(server_name_token)
+            mcp_gateway_server_version.reset(server_version_token)
 
     from litellm.proxy.mcp_server.operations import (
         _MCP_CREDENTIAL_REQUEST_FIELDS,

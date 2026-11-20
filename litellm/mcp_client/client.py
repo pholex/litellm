@@ -539,6 +539,7 @@ class MCPClient:
         # upstream client's auth= slot, taking precedence over the SigV4 aws_auth.
         self._resolved_auth: httpx2.Auth | None = resolved_auth
         self._last_initialize_instructions: str | None = None
+        self.last_initialize_server_version: str | None = None
         self._sampling_callback: Callable | None = sampling_callback
         self._elicitation_callback: ElicitationCallback | None = elicitation_callback
         self._logging_callback: Callable | None = logging_callback
@@ -808,6 +809,10 @@ class MCPClient:
                         self._last_initialize_instructions = (
                             instructions.strip() or None if isinstance(instructions, str) else None
                         )
+                        self.last_initialize_server_version = (
+                            init_result.server_info.version.strip() or None
+                            if isinstance(init_result, InitializeResult) else None
+                        )
                         result: Final = await operation(session)
                     except BaseException as operation_error:
                         in_flight_error = operation_error
@@ -875,6 +880,7 @@ class MCPClient:
         close_cancellation: asyncio.CancelledError | None = None
         try:
             self._last_initialize_instructions = None
+            self.last_initialize_server_version = None
             transport_ctx, http_client = self._create_transport_context()
             execution: Final = (
                 self._execute_session_operation(

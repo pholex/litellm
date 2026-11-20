@@ -44,5 +44,7 @@ mcp_gateway_server_name: Final[ContextVar[str | None]] = ContextVar("_mcp_gatewa
 
 _mcp_gateway_server_name: Final = mcp_gateway_server_name
 
+mcp_gateway_server_version: Final[ContextVar[str | None]] = ContextVar("mcp_gateway_server_version", default=None)
+
 # Set server-side by the /mcp/proxy route. Never populated from client-supplied headers.
 _mcp_proxy_mode: Final[ContextVar[bool]] = ContextVar("_mcp_proxy_mode", default=False)

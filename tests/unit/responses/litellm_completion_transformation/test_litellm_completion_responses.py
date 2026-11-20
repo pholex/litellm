@@ -7615,3 +7615,65 @@ def test_a_malformed_item_after_a_codex_additional_tools_item_is_named_by_its_in
         )
 
     assert f"'{field_path}'" in raised.value.message
+
+
+@pytest.mark.parametrize(
+    ("kind", "arguments", "payload_field", "result_id_field"),
+    [
+        ("apply_patch", {"type": "create_file", "path": "fixture.txt", "diff": "+hello"}, "operation", "call_id"),
+        ("local_shell", {"command": ["printf", "hello"]}, "action", "id"),
+    ],
+)
+def test_native_responses_tool_round_trip(
+    kind: str, arguments: dict[str, object], payload_field: str, result_id_field: str
+) -> None:
+    config = LiteLLMCompletionResponsesConfig
+    request: ResponsesAPIOptionalRequestParams = {
+        "tools": [{"type": kind}],
+        "tool_choice": {"type": kind},
+        "_bridge_native_tools": True,
+    }
+    chat_request = config.transform_responses_api_request_to_chat_completion_request(
+        model="gpt-4o",
+        input="Use the tool",
+        responses_api_request=request,
+    )
+    tool_name = chat_request["tools"][0]["function"]["name"]
+    assert chat_request["tool_choice"] == {"type": "function", "function": {"name": tool_name}}
+    call_id = "call_native_fixture"
+    response = config.transform_chat_completion_response_to_responses_api_response(
+        request_input="Use the tool",
+        responses_api_request=request,
+        chat_completion_response=ModelResponse(
+            choices=[
+                Choices(
+                    index=0,
+                    finish_reason="tool_calls",
+                    message=Message(
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id=call_id,
+                                type="function",
+                                function=Function(name=tool_name, arguments=json.dumps(arguments)),
+                            )
+                        ],
+                    ),
+                ),
+            ]
+        ),
+    )
+    assert len(response.output) == 1
+    call = response.output[0].model_dump(exclude_none=True)
+    assert call["type"] == f"{kind}_call"
+    assert call["call_id"] == call_id
+    assert {key: call[payload_field][key] for key in arguments} == arguments
+
+    result = {"type": f"{kind}_call_output", result_id_field: call_id, "output": "synthetic result"}
+    replay = config.transform_responses_api_request_to_chat_completion_request(
+        model="gpt-4o",
+        input=[{"role": "user", "content": "Use the tool"}, call, result],
+        responses_api_request=request,
+    )
+    assert replay["messages"][1]["tool_calls"][0]["id"] == call_id
+    assert replay["messages"][2] == {"role": "tool", "content": "synthetic result", "tool_call_id": call_id}
