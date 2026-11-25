@@ -82,6 +82,8 @@ async def _authenticate(request: Request):
     [
         ("POST", "/user/new", "/user/new", True),
         ("POST", "/key/generate", "/key/generate", True),
+        ("POST", "/invitation/new", "/invitation/new", True),
+        ("POST", "/invitation/delete", "/invitation/delete", True),
         ("GET", "/v1/models", "/v1/models", True),
         ("GET", "/spend/logs/ui/req-1", "/spend/logs/ui/{request_id}", True),
         ("POST", "/v1/chat/completions", "/v1/chat/completions", False),
