@@ -805,7 +805,17 @@ class ModelResponseIterator:
 
     def _handle_usage(self, anthropic_usage_chunk: Mapping[str, object]) -> Usage:
         # message_delta usage is cumulative but may omit fields reported at message_start.
-        self._cumulative_usage = MappingProxyType({**self._cumulative_usage, **anthropic_usage_chunk})
+        merged: Final = {**self._cumulative_usage, **anthropic_usage_chunk}
+        # The 5m/1h split describes one cache write total. When a later event reports a
+        # different total without its own split, the earlier split no longer adds up.
+        if (
+            "cache_creation" not in anthropic_usage_chunk
+            and "cache_creation_input_tokens" in anthropic_usage_chunk
+            and anthropic_usage_chunk["cache_creation_input_tokens"]
+            != self._cumulative_usage.get("cache_creation_input_tokens")
+        ):
+            merged.pop("cache_creation", None)
+        self._cumulative_usage = MappingProxyType(merged)
         reasoning_content: Final = "".join(self.reasoning_content_chunks) if self.reasoning_content_chunks else None
         usage: Final = AnthropicConfig().calculate_usage(
             usage_object=self._cumulative_usage,

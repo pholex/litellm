@@ -1012,6 +1012,10 @@ class ChunkProcessor:
                 if usage_chunk_dict["cache_creation_input_tokens"] is not None and (
                     _reports_prompt_side_usage(usage_chunk_dict) or cache_creation_input_tokens is None
                 ):
+                    # A new cache write total invalidates the 5m/1h split captured for the old
+                    # one; keep a split only when this chunk reports it again.
+                    if usage_chunk_dict["cache_creation_input_tokens"] != cache_creation_input_tokens:
+                        cache_creation_token_details = None
                     cache_creation_input_tokens = usage_chunk_dict["cache_creation_input_tokens"]
                 if usage_chunk_dict["cache_read_input_tokens"] is not None and (
                     _reports_prompt_side_usage(usage_chunk_dict) or cache_read_input_tokens is None

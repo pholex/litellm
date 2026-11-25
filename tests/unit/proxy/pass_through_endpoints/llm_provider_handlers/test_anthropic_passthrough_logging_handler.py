@@ -1356,6 +1356,82 @@ class TestPureTextFastPathParity:
     def test_parity_cache_tokens(self):
         self._assert_parity(self._text_stream(["a", "b", "c"], input_tokens=20, cache_creation=5, cache_read=7))
 
+    @pytest.mark.parametrize(
+        ("delta_usage", "expected_split"),
+        [
+            ({"output_tokens": 2}, (250, 750)),
+            (
+                {
+                    "input_tokens": 20,
+                    "output_tokens": 2,
+                    "cache_read_input_tokens": 7,
+                    "cache_creation_input_tokens": 1000,
+                },
+                (250, 750),
+            ),
+            (
+                {
+                    "input_tokens": 20,
+                    "output_tokens": 2,
+                    "cache_read_input_tokens": 7,
+                    "cache_creation_input_tokens": 1000,
+                    "cache_creation": {
+                        "ephemeral_5m_input_tokens": 600,
+                        "ephemeral_1h_input_tokens": 400,
+                    },
+                },
+                (600, 400),
+            ),
+            (
+                {
+                    "input_tokens": 20,
+                    "output_tokens": 2,
+                    "cache_read_input_tokens": 7,
+                    "cache_creation_input_tokens": 1200,
+                },
+                None,
+            ),
+        ],
+    )
+    def test_stream_assembly_preserves_cache_write_tiers(self, delta_usage, expected_split):
+        from litellm.llms.anthropic.cost_calculation import cost_per_token
+
+        model = "claude-sonnet-4-6"
+        frames = self._text_stream(["a", "b"], input_tokens=20, cache_creation=1000, cache_read=7)
+        start = json.loads(frames[0].decode().splitlines()[1][6:])
+        start["message"]["model"] = model
+        start["message"]["usage"]["cache_creation"] = {
+            "ephemeral_5m_input_tokens": 250,
+            "ephemeral_1h_input_tokens": 750,
+        }
+        frames[0] = self._sse("message_start", start)
+        delta = json.loads(frames[-2].decode().splitlines()[1][6:])
+        frames[-2] = self._sse("message_delta", {**delta, "usage": delta_usage})
+
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {}
+        response = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+            all_chunks=self._to_all_chunks(frames),
+            litellm_logging_obj=logging_obj,
+            model=model,
+        )
+
+        assert response is not None
+        assert response.usage.completion_tokens == 2
+        details = response.usage.prompt_tokens_details
+        split = getattr(details, "cache_creation_token_details", None)
+        if expected_split is None:
+            assert split is None
+            split_5m, split_1h = 1200, 0
+        else:
+            assert split is not None
+            assert (split.ephemeral_5m_input_tokens, split.ephemeral_1h_input_tokens) == expected_split
+            split_5m, split_1h = expected_split
+        assert details.cache_creation_tokens == split_5m + split_1h
+        input_cost, output_cost = cost_per_token(model, response.usage)
+        assert input_cost == pytest.approx((20 * 3 + 7 * 0.3 + split_5m * 3.75 + split_1h * 6) / 1e6)
+        assert output_cost == pytest.approx(2 * 15 / 1e6)
+
     def test_parity_max_tokens_stop(self):
         self._assert_parity(self._text_stream(["tok"] * 8, stop_reason="max_tokens"))
 
