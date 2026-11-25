@@ -2,7 +2,7 @@
 import os
 from typing import Final
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Response
 
 from litellm.proxy.common_utils.claude_code_marketplace_auth import marketplace_auth_required
 from litellm.proxy.common_utils.html_forms.default_credentials_hint import should_hide_default_credentials_hint
@@ -16,7 +16,12 @@ router: Final = APIRouter()
 
 @router.get("/.well-known/litellm-ui-config", response_model=UiDiscoveryEndpoints)
 @router.get("/litellm/.well-known/litellm-ui-config", response_model=UiDiscoveryEndpoints)  # if mounted at root path
-async def get_ui_config():
+async def get_ui_config(response: Response):
+    # The dashboard blocks its first render on this request. Without an explicit
+    # directive the browser may route it through its HTTP cache, where same-URL
+    # requests queue behind each other and a stuck one delays the rest.
+    response.headers["Cache-Control"] = "no-store"
+
     from litellm.proxy.auth.auth_utils import has_user_setup_sso
     from litellm.proxy.proxy_server import general_settings
     from litellm.proxy.utils import get_proxy_base_url, get_server_root_path

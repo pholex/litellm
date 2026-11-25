@@ -245,6 +245,10 @@ def test_ui_discovery_endpoints_both_routes_return_same_data():
         assert response1.status_code == 200
         assert response2.status_code == 200
         assert response1.json() == response2.json()
+        # The dashboard blocks first render on this request, so it must never be
+        # served through (or queued behind) the browser HTTP cache.
+        assert response1.headers["cache-control"] == "no-store"
+        assert response2.headers["cache-control"] == "no-store"
 
 
 def test_ui_discovery_endpoints_with_auto_redirect_via_general_settings():
