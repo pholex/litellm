@@ -42,6 +42,7 @@ if TYPE_CHECKING:
 import jwt
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
+from httpx import HTTPStatusError
 from pydantic import AliasPath, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
 
 import litellm
@@ -4479,32 +4480,46 @@ class SSOAuthenticationHandler:
                 token_data["client_secret"] = client_secret
 
         http_client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.SSO_HANDLER)
+        response: httpx.Response
         try:
-            response: Final = await http_client.post(
+            response = await http_client.post(
                 url=token_endpoint,
                 data=token_data,
                 headers=request_headers,
                 timeout=30.0,
             )
+        except HTTPStatusError as exc:
+            # The handler raises on non-2xx; inspect the response below instead.
+            response = exc.response
         except Exception as exc:
-            # Catch network-level errors (SSL, DNS, TCP, timeout, etc.) and
-            # wrap them as a clean ProxyException rather than leaking raw
-            # httpx or OS exceptions to callers.
-            verbose_proxy_logger.error("PKCE token endpoint unreachable: %s", exc)
+            # Network-level errors (SSL, DNS, TCP, timeout, etc.). Log only the
+            # error type: the message can carry request details.
+            verbose_proxy_logger.error("PKCE token endpoint request failed. error_type=%s", type(exc).__name__)
             raise ProxyException(
-                message=f"Token endpoint request failed: {exc}",
+                message="Token endpoint request failed",
                 type=ProxyErrorTypes.auth_error,
                 param="token_exchange",
                 code=status.HTTP_401_UNAUTHORIZED,
             ) from exc
+
         if response.status_code != 200:
+            # Never log or return the body: a provider can echo the authorization
+            # code, client credentials or tokens. Keep only an integer provider
+            # code and a well-formed request id for support lookups.
+            try:
+                payload = response.json()
+            except ValueError:
+                payload = None
+            provider_code = payload.get("code") if isinstance(payload, dict) else None
+            request_id = response.headers.get("x-tt-logid", "")
             verbose_proxy_logger.error(
-                "PKCE token exchange failed. status=%s body=%s",
+                "PKCE token exchange failed. status=%s provider_code=%s request_id=%s",
                 response.status_code,
-                response.text[:500],
+                provider_code if type(provider_code) is int else None,
+                request_id if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", request_id) else None,
             )
             raise ProxyException(
-                message=f"Token exchange failed: {response.status_code} - {response.text[:500]}",
+                message=f"Token exchange failed: HTTP {response.status_code}",
                 type=ProxyErrorTypes.auth_error,
                 param="token_exchange",
                 code=status.HTTP_401_UNAUTHORIZED,

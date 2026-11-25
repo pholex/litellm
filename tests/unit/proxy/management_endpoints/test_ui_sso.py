@@ -6605,41 +6605,90 @@ class TestPKCEFunctionality:
             if r.levelno >= logging.WARNING
         ), f"Expected a cache-miss warning. Records: {[r.message for r in caplog.records]}"
 
-    @pytest.mark.asyncio
-    async def test_pkce_token_exchange_non200_raises_proxy_exception(self):
-        """_pkce_token_exchange raises ProxyException when the token endpoint
-        returns a non-200 status (e.g. 401 Unauthorized from provider)."""
-        from unittest.mock import AsyncMock, MagicMock, patch
+    _PKCE_SECRETS = ("auth_code_private", "verifier_private", "secret_private", "private-response-data")
 
+    @staticmethod
+    async def _run_failing_pkce_exchange(client):
         from litellm.proxy._types import ProxyException
-        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
-        mock_response = MagicMock()
-        mock_response.status_code = 401
-        mock_response.text = "Unauthorized"
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client",
+                return_value=client,
+            ),
+            patch("litellm.proxy.management_endpoints.ui_sso.verbose_proxy_logger") as logger,
+            pytest.raises(ProxyException) as exc_info,
+        ):
+            await SSOAuthenticationHandler._pkce_token_exchange(
+                authorization_code="auth_code_private",
+                code_verifier="verifier_private",
+                client_id="client_id",
+                client_secret="secret_private",
+                token_endpoint="https://example.com/token",
+                userinfo_endpoint=None,
+                include_client_id=True,
+                redirect_url="https://proxy.example.com/callback",
+                additional_headers={},
+            )
+        return logger, exc_info.value
 
-        with patch(
-            "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
-        ) as mock_get_client:
-            mock_client = MagicMock()
-            mock_client.post = AsyncMock(return_value=mock_response)
-            mock_get_client.return_value = mock_client
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("body", "request_id", "expected_code", "expected_request_id"),
+        [
+            (
+                '{"code":20049,"error_description":"private-response-data auth_code_private"}',
+                "feishu-request-id",
+                "20049",
+                "feishu-request-id",
+            ),
+            (
+                "<html>private-response-data secret_private</html>",
+                "private-response-data invalid-header",
+                "None",
+                "None",
+            ),
+        ],
+    )
+    async def test_pkce_token_exchange_non200_logs_safe_diagnostics(
+        self, body, request_id, expected_code, expected_request_id
+    ):
+        from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
 
-            with pytest.raises(ProxyException) as exc_info:
-                await SSOAuthenticationHandler._pkce_token_exchange(
-                    authorization_code="auth_code",
-                    code_verifier="verifier",
-                    client_id="client_id",
-                    client_secret="secret",
-                    token_endpoint="https://example.com/token",
-                    userinfo_endpoint=None,
-                    include_client_id=True,
-                    redirect_url="https://proxy.example.com/callback",
-                    additional_headers={},
-                )
+        request = httpx.Request("POST", "https://example.com/token")
+        response = httpx.Response(400, request=request, text=body, headers={"x-tt-logid": request_id})
+        http_error = httpx.HTTPStatusError("400 Bad Request", request=request, response=response)
+        client = MagicMock()
+        client.post = AsyncMock(side_effect=MaskedHTTPStatusError(http_error, text=body))
 
-        assert "token" in exc_info.value.message.lower()
-        assert str(exc_info.value.code) == "401"
+        logger, error = await self._run_failing_pkce_exchange(client)
+
+        (message, *args), _ = logger.error.call_args
+        logged = message % tuple(args)
+        assert logged == (
+            f"PKCE token exchange failed. status=400 provider_code={expected_code} request_id={expected_request_id}"
+        )
+        assert error.message == "Token exchange failed: HTTP 400"
+        assert error.param == "token_exchange"
+        assert str(error.code) == "401"
+        for value in self._PKCE_SECRETS:
+            assert value not in logged
+            assert value not in error.message
+
+    @pytest.mark.asyncio
+    async def test_pkce_token_endpoint_network_error_hides_details(self):
+        client = MagicMock()
+        client.post = AsyncMock(side_effect=httpx.ConnectError("connect failed: secret_private auth_code_private"))
+
+        logger, error = await self._run_failing_pkce_exchange(client)
+
+        (message, *args), _ = logger.error.call_args
+        logged = message % tuple(args)
+        assert logged == "PKCE token endpoint request failed. error_type=ConnectError"
+        assert error.message == "Token endpoint request failed"
+        for value in self._PKCE_SECRETS:
+            assert value not in logged
+            assert value not in error.message
 
     @pytest.mark.asyncio
     async def test_pkce_cache_miss_unexpected_format_non_strict_logs_warning(
