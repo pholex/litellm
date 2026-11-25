@@ -267,7 +267,64 @@ def _is_master_key_source_allowed(request: Request | None, networks: list[_IPNet
     return any(address in network for network in networks)
 
 
+_ENV_REFERENCE_PREFIX: Final = "os.environ/"
+_WRITE_METHODS: Final = frozenset(("POST", "PUT", "PATCH", "DELETE"))
+
+
+def _contains_env_reference(value: object) -> bool:
+    """True if any string inside ``value`` (dicts and lists walked iteratively) is an
+    ``os.environ/`` reference."""
+    stack: Final[list[object]] = [value]
+    seen: Final[set[int]] = set()
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            if item.startswith(_ENV_REFERENCE_PREFIX):
+                return True
+            continue
+        if isinstance(item, (dict, list, tuple)):
+            if id(item) in seen:
+                continue
+            seen.add(id(item))
+            if isinstance(item, dict):
+                stack.extend(item.keys())
+                stack.extend(item.values())
+            else:
+                stack.extend(item)
+    return False
+
+
 class RouteChecks:
+    @staticmethod
+    def reject_env_references_in_management_writes(
+        route: str,
+        request: Request | None,
+        request_data: Mapping[str, object] | None,
+    ) -> None:
+        """
+        Refuse ``os.environ/`` references in request bodies of management writes.
+
+        Values stored through the management API (models, credentials, pass-through
+        endpoints, settings) are later resolved from the server environment when
+        loaded. A request that stores ``api_key: os.environ/<NAME>`` next to an
+        ``api_base`` it controls would make the proxy send that server secret to the
+        caller. Environment references belong in the server-side config file only.
+        Model calls are not affected.
+        """
+        if request is None or not request_data:
+            return
+        method: Final = RouteChecks.get_request_method(request=request)
+        if method not in _WRITE_METHODS:
+            return
+        if RouteChecks.is_llm_api_route(route=route):
+            return
+        if _contains_env_reference(request_data):
+            verbose_proxy_logger.warning("Rejected a management write that contains an environment variable reference.")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Environment variable references are not permitted in management requests.",
+            )
+
     @staticmethod
     def check_route_enabled(route: str) -> None:
         try:

