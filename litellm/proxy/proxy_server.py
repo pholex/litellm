@@ -6738,6 +6738,13 @@ class ProxyConfig:
         "CLOUDSDK_CONFIG",
     }
 
+    @classmethod
+    def _is_blocked_env_key(cls, key: object) -> bool:
+        """Applies to every source that writes the process environment: the config
+        file and values stored in the database. The DB path also exports each key in
+        upper case, so the upper-cased form is checked as well."""
+        return isinstance(key, str) and (key in cls._BLOCKED_ENV_KEYS or key.upper() in cls._BLOCKED_ENV_KEYS)
+
     def _load_environment_variables(self, config: dict):
         ## ENVIRONMENT VARIABLES
         environment_variables: Final = config.get("environment_variables", None)
@@ -6746,7 +6753,7 @@ class ProxyConfig:
                 if not isinstance(key, str):
                     verbose_proxy_logger.warning("Skipping an environment_variables key that is not a string")
                     continue
-                if key in self._BLOCKED_ENV_KEYS:
+                if self._is_blocked_env_key(key):
                     verbose_proxy_logger.warning("Skipping blocked environment variable key: %s", key)
                     continue
                 if is_mcp_stdio_flag_key(key):
@@ -8229,6 +8236,11 @@ class ProxyConfig:
                         MCP_STDIO_ENABLED_ENV_VAR,
                     )
                     self._warned_db_mcp_stdio_flag_ignored = True
+                continue
+            if self._is_blocked_env_key(k):
+                # Skipped keys are also left out of the returned dict, so the caller's
+                # upper-case export and config merge never see them.
+                verbose_proxy_logger.warning("Skipping blocked environment variable key stored in the database: %s", k)
                 continue
             try:
                 decrypted_value = decrypt_value_helper(value=v, key=k, return_original_value=return_original_value)
