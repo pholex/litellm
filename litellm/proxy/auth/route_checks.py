@@ -6,6 +6,7 @@ from typing import Final, cast
 from fastapi import HTTPException, Request, status
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.proxy._types import (
     MODEL_LIST_ROUTES,
     UI_TEAM_ID,
@@ -18,6 +19,7 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
+from litellm.secret_managers.main import get_secret_bool
 
 from .auth_checks_organization import (  # noqa: F401  # legacy module exports
     _user_is_org_admin,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -109,6 +111,99 @@ _TOKEN_COUNTING_SEGMENTS: Final[frozenset[str]] = frozenset({"count_tokens", "co
 _TOKEN_COUNTING_ACTION: Final = "countTokens"
 
 
+# Match the routed endpoint and method. Broad prefixes and route groups can
+# include handlers that call a model, such as the active /health probe.
+_MASTER_KEY_MANAGEMENT_ROUTES: Final[Mapping[str, frozenset[str]]] = {
+    "GET": frozenset(
+        (
+            "/config/field/info",
+            "/config/list",
+            "/global/activity",
+            "/global/activity/model",
+            "/global/spend",
+            "/global/spend/keys",
+            "/global/spend/logs",
+            "/global/spend/models",
+            "/global/spend/provider",
+            "/global/spend/report",
+            "/global/spend/teams",
+            "/key/aliases",
+            "/key/info",
+            "/key/list",
+            "/model/info",
+            "/model/settings",
+            "/model_group/info",
+            "/models",
+            "/organization/info",
+            "/organization/list",
+            "/spend/logs",
+            "/spend/logs/v2",
+            "/spend/logs/ui",
+            "/spend/logs/ui/{request_id}",
+            "/team/available",
+            "/team/info",
+            "/team/list",
+            "/team/permissions_list",
+            "/user/available_roles",
+            "/user/daily/activity",
+            "/user/daily/activity/aggregated",
+            "/user/filter/ui",
+            "/user/info",
+            "/user/list",
+            "/v1/model/info",
+            "/v1/models",
+            "/v2/model/info",
+            "/v2/team/list",
+            "/v2/user/info",
+        )
+    ),
+    "POST": frozenset(
+        (
+            "/budget/delete",
+            "/budget/info",
+            "/budget/new",
+            "/budget/update",
+            "/cache/delete",
+            "/key/block",
+            "/key/bulk_update",
+            "/key/delete",
+            "/key/generate",
+            "/key/regenerate",
+            "/key/service-account/generate",
+            "/key/unblock",
+            "/key/update",
+            "/key/{key:path}/regenerate",
+            "/key/{key:path}/reset_spend",
+            "/model/block",
+            "/model/delete",
+            "/model/new",
+            "/model/unblock",
+            "/model/update",
+            "/organization/info",
+            "/organization/member_add",
+            "/organization/new",
+            "/team/block",
+            "/team/delete",
+            "/team/key/bulk_update",
+            "/team/member_add",
+            "/team/member_delete",
+            "/team/member_update",
+            "/team/new",
+            "/team/permissions_update",
+            "/team/unblock",
+            "/team/update",
+            "/user/bulk_update",
+            "/user/delete",
+            "/user/new",
+            "/user/update",
+            "/v2/key/info",
+        )
+    ),
+    "PATCH": frozenset(("/model/{model_id}/update", "/organization/member_update", "/organization/update")),
+    "DELETE": frozenset(("/organization/delete", "/organization/member_delete")),
+}
+
+
 class RouteChecks:
     @staticmethod
     def check_route_enabled(route: str) -> None:
@@ -130,6 +225,21 @@ class RouteChecks:
         """
         Check if management route is disabled and raise exception
         """
+        if (
+            valid_token.api_key == LITELLM_PROXY_MASTER_KEY_ALIAS
+            and get_secret_bool("LITELLM_MASTER_KEY_MANAGEMENT_ONLY") is True
+        ):
+            # Deferred: auth_utils imports RouteChecks at module load.
+            from .auth_utils import get_request_route_template
+
+            method = RouteChecks.get_request_method(request=request)
+            template = get_request_route_template(request=request) if request is not None else None
+            if method is None or template is None or template not in _MASTER_KEY_MANAGEMENT_ROUTES.get(method, ()):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="The proxy master key is restricted to management routes.",
+                )
+
         RouteChecks.check_route_enabled(route)
         # Check if Virtual Key is allowed to call the route - Applies to all Roles
         RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=valid_token, request=request)
