@@ -1,7 +1,9 @@
+import ipaddress
 import itertools
+import os
 import re
 from collections.abc import Collection, Iterable, Mapping
-from typing import Final, cast
+from typing import Final, TypeAlias, cast
 
 from fastapi import HTTPException, Request, status
 
@@ -207,6 +209,64 @@ _MASTER_KEY_MANAGEMENT_ROUTES: Final[Mapping[str, frozenset[str]]] = {
 }
 
 
+_IPNetwork: TypeAlias = ipaddress.IPv4Network | ipaddress.IPv6Network
+
+
+def _get_master_key_allowed_networks() -> list[_IPNetwork] | None:
+    """
+    Networks the proxy master key may be used from, read from the comma-separated
+    ``LITELLM_MASTER_KEY_ALLOWED_IPS`` (addresses or CIDRs).
+
+    Returns None when the variable is unset or blank (no restriction). Entries
+    that do not parse are skipped, so a value with no valid entry denies every
+    source instead of silently lifting the restriction.
+    """
+    raw: Final = os.getenv("LITELLM_MASTER_KEY_ALLOWED_IPS")
+    if raw is None or not raw.strip():
+        return None
+    networks: Final[list[_IPNetwork]] = []
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(entry, strict=False))
+        except ValueError:
+            verbose_proxy_logger.warning("Ignoring an invalid LITELLM_MASTER_KEY_ALLOWED_IPS entry.")
+    return networks
+
+
+def _get_master_key_source_ip(request: Request | None) -> str | None:
+    """
+    Address the master key request came from.
+
+    Behind a load balancer the last ``X-Forwarded-For`` hop is the one the
+    balancer appended, i.e. the peer it actually accepted the connection from.
+    Earlier hops are supplied by the client and must not be trusted. Without the
+    header the request reached the proxy directly, so use the socket peer.
+    """
+    if request is None:
+        return None
+    forwarded_for: Final = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        last_hop: Final = forwarded_for.split(",")[-1].strip()
+        return last_hop or None
+    if request.client is not None:
+        return request.client.host
+    return None
+
+
+def _is_master_key_source_allowed(request: Request | None, networks: list[_IPNetwork]) -> bool:
+    source_ip: Final = _get_master_key_source_ip(request=request)
+    if source_ip is None:
+        return False
+    try:
+        address: Final = ipaddress.ip_address(source_ip)
+    except ValueError:
+        return False
+    return any(address in network for network in networks)
+
+
 class RouteChecks:
     @staticmethod
     def check_route_enabled(route: str) -> None:
@@ -228,6 +288,19 @@ class RouteChecks:
         """
         Check if management route is disabled and raise exception
         """
+        if valid_token.api_key == LITELLM_PROXY_MASTER_KEY_ALIAS:
+            allowed_networks: Final = _get_master_key_allowed_networks()
+            if allowed_networks is not None and not _is_master_key_source_allowed(
+                request=request, networks=allowed_networks
+            ):
+                verbose_proxy_logger.warning(
+                    "Rejected a proxy master key request from a source address outside LITELLM_MASTER_KEY_ALLOWED_IPS."
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="The proxy master key is not accepted from this source address.",
+                )
+
         if (
             valid_token.api_key == LITELLM_PROXY_MASTER_KEY_ALIAS
             and get_secret_bool("LITELLM_MASTER_KEY_MANAGEMENT_ONLY") is True

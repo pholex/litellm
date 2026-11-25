@@ -138,3 +138,102 @@ def test_management_only_is_off_unless_enabled(monkeypatch):
         valid_token=UserAPIKeyAuth(api_key=LITELLM_PROXY_MASTER_KEY_ALIAS, user_role=LitellmUserRoles.PROXY_ADMIN),
         request=_request("POST", "/v1/chat/completions", "/v1/chat/completions"),
     )
+
+
+def _master_key_request(headers=None, client=("10.0.0.5", 1234), method="GET", path="/key/list") -> Request:
+    return _request(
+        method,
+        path,
+        path,
+        headers=[(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()],
+        client=client,
+    )
+
+
+def _master_key_token() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(api_key=LITELLM_PROXY_MASTER_KEY_ALIAS, user_role=LitellmUserRoles.PROXY_ADMIN)
+
+
+@pytest.mark.parametrize(
+    "headers, client, allowed",
+    [
+        # The hop appended by the load balancer decides.
+        ({"x-forwarded-for": "203.0.113.7"}, ("10.0.0.5", 1), True),
+        ({"x-forwarded-for": "198.51.100.9"}, ("10.0.0.5", 1), False),
+        # A client-supplied earlier hop naming an allowed address must not help.
+        ({"x-forwarded-for": "203.0.113.7, 198.51.100.9"}, ("10.0.0.5", 1), False),
+        # ...and a spoofed disallowed earlier hop must not hurt an allowed caller.
+        ({"x-forwarded-for": "198.51.100.9, 203.0.113.7"}, ("10.0.0.5", 1), True),
+        # CIDR entries match.
+        ({"x-forwarded-for": "192.0.2.77"}, ("10.0.0.5", 1), True),
+        # No header: the socket peer is used.
+        ({}, ("203.0.113.7", 1), True),
+        ({}, ("10.0.0.5", 1), False),
+        # Nothing usable identifies the source.
+        ({}, None, False),
+        ({"x-forwarded-for": "not-an-ip"}, ("203.0.113.7", 1), False),
+    ],
+)
+def test_master_key_allowed_ips(monkeypatch, headers, client, allowed):
+    monkeypatch.delenv("LITELLM_MASTER_KEY_MANAGEMENT_ONLY", raising=False)
+    monkeypatch.setenv("LITELLM_MASTER_KEY_ALLOWED_IPS", "203.0.113.7, 192.0.2.0/24")
+    request = _master_key_request(headers=headers, client=client)
+    if allowed:
+        assert RouteChecks.should_call_route(route="/key/list", valid_token=_master_key_token(), request=request)
+    else:
+        with pytest.raises(HTTPException) as denied:
+            RouteChecks.should_call_route(route="/key/list", valid_token=_master_key_token(), request=request)
+        assert denied.value.status_code == 403
+        assert "source address" in denied.value.detail
+
+
+@pytest.mark.parametrize("value", [None, "", "   "])
+def test_master_key_allowed_ips_unset_means_no_restriction(monkeypatch, value):
+    monkeypatch.delenv("LITELLM_MASTER_KEY_MANAGEMENT_ONLY", raising=False)
+    if value is None:
+        monkeypatch.delenv("LITELLM_MASTER_KEY_ALLOWED_IPS", raising=False)
+    else:
+        monkeypatch.setenv("LITELLM_MASTER_KEY_ALLOWED_IPS", value)
+    request = _master_key_request(headers={"x-forwarded-for": "198.51.100.9"})
+    assert RouteChecks.should_call_route(route="/key/list", valid_token=_master_key_token(), request=request)
+
+
+def test_master_key_allowed_ips_all_invalid_entries_deny(monkeypatch):
+    """A set but unusable value must fail closed, not lift the restriction."""
+    monkeypatch.delenv("LITELLM_MASTER_KEY_MANAGEMENT_ONLY", raising=False)
+    monkeypatch.setenv("LITELLM_MASTER_KEY_ALLOWED_IPS", "office, nonsense/99")
+    request = _master_key_request(headers={"x-forwarded-for": "203.0.113.7"})
+    with pytest.raises(HTTPException) as denied:
+        RouteChecks.should_call_route(route="/key/list", valid_token=_master_key_token(), request=request)
+    assert denied.value.status_code == 403
+
+
+def test_master_key_allowed_ips_does_not_restrict_virtual_keys(monkeypatch):
+    monkeypatch.setenv("LITELLM_MASTER_KEY_ALLOWED_IPS", "203.0.113.7")
+    request = _master_key_request(headers={"x-forwarded-for": "198.51.100.9"}, method="POST", path="/v1/responses")
+    assert RouteChecks.should_call_route(
+        route="/v1/responses",
+        valid_token=UserAPIKeyAuth(
+            api_key="virtual-key-hash",
+            allowed_routes=["llm_api_routes"],
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        ),
+        request=request,
+    )
+
+
+def test_master_key_allowed_ips_applies_before_management_only(monkeypatch):
+    """Both restrictions hold together: an allowed source is still limited to
+    management routes, and a disallowed source is refused on a management route."""
+    monkeypatch.setenv("LITELLM_MASTER_KEY_MANAGEMENT_ONLY", "true")
+    monkeypatch.setenv("LITELLM_MASTER_KEY_ALLOWED_IPS", "203.0.113.7")
+    ok = _master_key_request(headers={"x-forwarded-for": "203.0.113.7"})
+    assert RouteChecks.should_call_route(route="/key/list", valid_token=_master_key_token(), request=ok)
+    llm = _master_key_request(headers={"x-forwarded-for": "203.0.113.7"}, method="POST", path="/v1/responses")
+    with pytest.raises(HTTPException) as denied:
+        RouteChecks.should_call_route(route="/v1/responses", valid_token=_master_key_token(), request=llm)
+    assert "management routes" in denied.value.detail
+    bad = _master_key_request(headers={"x-forwarded-for": "198.51.100.9"})
+    with pytest.raises(HTTPException) as denied:
+        RouteChecks.should_call_route(route="/key/list", valid_token=_master_key_token(), request=bad)
+    assert "source address" in denied.value.detail
