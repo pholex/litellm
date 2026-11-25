@@ -1710,6 +1710,7 @@ async def get_generic_sso_response(
         # Extract code_verifier (and the cache key for deferred deletion) before calling fastapi-sso
         code_verifier = token_exchange_params.pop("code_verifier", None)
         pkce_cache_key: Final = token_exchange_params.pop("_pkce_cache_key", None)
+        challenge_matches: Final = token_exchange_params.pop("_pkce_challenge_matches", None)
 
         # Get authorization code from query params (only used in the PKCE path below;
         # the non-PKCE path delegates to verify_and_process which handles OAuth error
@@ -1774,6 +1775,7 @@ async def get_generic_sso_response(
                 include_client_id=generic_include_client_id,
                 redirect_url=redirect_url,
                 additional_headers=additional_generic_sso_headers_dict,
+                challenge_matches=challenge_matches,
             )
             # Pass the full response so custom response_convertor implementations
             # can access all fields (including id_token for claim extraction).
@@ -3492,16 +3494,22 @@ class SSOAuthenticationHandler:
                 # JSON serialization in Redis. Use Redis when available so callbacks
                 # landing on another pod can retrieve it (multi-pod SSO).
                 cache_key: Final = f"pkce_verifier:{redirect_params['state']}"
+                # The challenge is public (it is sent in the authorization URL); kept so the
+                # callback can report whether the retrieved verifier still matches it.
+                cache_value: Final = {
+                    "code_verifier": code_verifier,
+                    "code_challenge": pkce_params.get("code_challenge"),
+                }
                 if redis_usage_cache is not None:
                     await redis_usage_cache.async_set_cache(
                         key=cache_key,
-                        value={"code_verifier": code_verifier},
+                        value=cache_value,
                         ttl=600,
                     )
                 else:
                     await user_api_key_cache.async_set_cache(
                         key=cache_key,
-                        value={"code_verifier": code_verifier},
+                        value=cache_value,
                         ttl=600,
                     )
                 verbose_proxy_logger.debug("PKCE code_verifier stored in cache (TTL: 600s)")
@@ -4202,6 +4210,11 @@ class SSOAuthenticationHandler:
                             state,
                         )
                     else:
+                        cached_challenge = cached_mapping.get("code_challenge")
+                        if isinstance(code_verifier, str) and isinstance(cached_challenge, str):
+                            token_params["_pkce_challenge_matches"] = (
+                                SSOAuthenticationHandler._compute_s256_challenge(code_verifier) == cached_challenge
+                            )
                         verbose_proxy_logger.debug("PKCE code_verifier retrieved from cache")
                 elif isinstance(cached_data, str):
                     # Handle legacy format (plain string) for backward compatibility
@@ -4358,11 +4371,13 @@ class SSOAuthenticationHandler:
         # Using 32 random bytes which becomes 43 characters when base64-url-encoded
         code_verifier: Final = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("utf-8").rstrip("=")
 
-        # Generate code_challenge using S256 method (SHA256)
-        code_challenge_bytes: Final = hashlib.sha256(code_verifier.encode("utf-8")).digest()
-        code_challenge: Final = base64.urlsafe_b64encode(code_challenge_bytes).decode("utf-8").rstrip("=")
+        return code_verifier, SSOAuthenticationHandler._compute_s256_challenge(code_verifier)
 
-        return code_verifier, code_challenge
+    @staticmethod
+    def _compute_s256_challenge(code_verifier: str) -> str:
+        """Base64-URL-encoded SHA256 of the verifier (RFC 7636 S256)."""
+        digest: Final = hashlib.sha256(code_verifier.encode("utf-8")).digest()
+        return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
 
     @staticmethod
     def _validate_token_response(response: "httpx.Response") -> dict:
@@ -4436,6 +4451,7 @@ class SSOAuthenticationHandler:
         include_client_id: bool,
         redirect_url: str | None,
         additional_headers: dict[str, str],
+        challenge_matches: bool | None = None,
     ) -> dict:
         """
         Performs a direct OAuth token exchange including the PKCE code_verifier.
@@ -4513,10 +4529,11 @@ class SSOAuthenticationHandler:
             provider_code = payload.get("code") if isinstance(payload, dict) else None
             request_id = response.headers.get("x-tt-logid", "")
             verbose_proxy_logger.error(
-                "PKCE token exchange failed. status=%s provider_code=%s request_id=%s",
+                "PKCE token exchange failed. status=%s provider_code=%s request_id=%s challenge_matches=%s",
                 response.status_code,
                 provider_code if type(provider_code) is int else None,
                 request_id if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", request_id) else None,
+                challenge_matches,
             )
             raise ProxyException(
                 message=f"Token exchange failed: HTTP {response.status_code}",

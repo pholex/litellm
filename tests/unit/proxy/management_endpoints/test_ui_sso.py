@@ -5850,6 +5850,7 @@ class TestPKCEFunctionality:
             assert token_params["code_verifier"] == test_code_verifier
             # Cache key is returned for deferred deletion (after exchange succeeds)
             assert token_params["_pkce_cache_key"] == f"pkce_verifier:{test_state}"
+            assert "_pkce_challenge_matches" not in token_params
 
             # Verify cache was read but NOT deleted yet (deletion is deferred to after
             # successful token exchange to preserve the verifier for retries)
@@ -5912,11 +5913,14 @@ class TestPKCEFunctionality:
                 assert f"state={test_state}" in updated_location
 
     @pytest.mark.asyncio
-    async def test_pkce_redis_multi_pod_verifier_roundtrip(self):
+    @pytest.mark.parametrize("challenge_matches", [True, False])
+    async def test_pkce_redis_multi_pod_verifier_roundtrip(self, challenge_matches):
         """
         Mock Redis to verify PKCE code_verifier round-trip across "pods":
         Pod A stores verifier in Redis; Pod B retrieves it (no real IdP).
         """
+        from urllib.parse import parse_qs, urlsplit
+
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         # In-memory mock of Redis (shared between "pods")
@@ -5960,7 +5964,7 @@ class TestPKCEFunctionality:
                     "litellm.proxy.proxy_server.user_api_key_cache", mock_in_memory
                 ):
                     # Pod A: start login, store code_verifier in "Redis"
-                    await SSOAuthenticationHandler.get_generic_sso_redirect_response(
+                    redirect = await SSOAuthenticationHandler.get_generic_sso_redirect_response(
                         generic_sso=mock_sso,
                         state="multi_pod_state_xyz",
                         generic_authorization_endpoint="https://auth.example.com/authorize",
@@ -5976,6 +5980,11 @@ class TestPKCEFunctionality:
                         isinstance(stored_dict, dict) and "code_verifier" in stored_dict
                     )
                     assert len(stored_dict["code_verifier"]) == 43
+                    location = str(redirect.headers["location"])
+                    assert parse_qs(urlsplit(location).query)["code_challenge"] == [stored_dict["code_challenge"]]
+                    if not challenge_matches:
+                        stored_dict["code_verifier"] = "x" * 43
+                        mock_redis._store[stored_key] = json.dumps(stored_dict)
 
                     # Pod B: callback with same state, retrieve from "Redis"
                     mock_request = MagicMock(spec=Request)
@@ -5985,6 +5994,7 @@ class TestPKCEFunctionality:
                     )
                     assert "code_verifier" in token_params
                     assert token_params["code_verifier"] == stored_dict["code_verifier"]
+                    assert token_params["_pkce_challenge_matches"] is challenge_matches
                     # Cache key returned for deferred deletion after successful exchange
                     assert token_params["_pkce_cache_key"] == stored_key
                     mock_in_memory.async_get_cache.assert_not_called()
@@ -6608,7 +6618,7 @@ class TestPKCEFunctionality:
     _PKCE_SECRETS = ("auth_code_private", "verifier_private", "secret_private", "private-response-data")
 
     @staticmethod
-    async def _run_failing_pkce_exchange(client):
+    async def _run_failing_pkce_exchange(client, challenge_matches=None):
         from litellm.proxy._types import ProxyException
 
         with (
@@ -6629,6 +6639,7 @@ class TestPKCEFunctionality:
                 include_client_id=True,
                 redirect_url="https://proxy.example.com/callback",
                 additional_headers={},
+                challenge_matches=challenge_matches,
             )
         return logger, exc_info.value
 
@@ -6661,12 +6672,13 @@ class TestPKCEFunctionality:
         client = MagicMock()
         client.post = AsyncMock(side_effect=MaskedHTTPStatusError(http_error, text=body))
 
-        logger, error = await self._run_failing_pkce_exchange(client)
+        logger, error = await self._run_failing_pkce_exchange(client, challenge_matches=False)
 
         (message, *args), _ = logger.error.call_args
         logged = message % tuple(args)
         assert logged == (
             f"PKCE token exchange failed. status=400 provider_code={expected_code} request_id={expected_request_id}"
+            " challenge_matches=False"
         )
         assert error.message == "Token exchange failed: HTTP 400"
         assert error.param == "token_exchange"
