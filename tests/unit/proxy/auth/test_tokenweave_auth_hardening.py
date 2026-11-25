@@ -331,3 +331,89 @@ async def test_user_api_key_auth_rejects_env_reference_on_model_new(monkeypatch)
         common_checks.assert_not_awaited()
     assert denied.value.status_code == 400
     assert "Environment variable references" in str(denied.value.detail)
+
+
+@pytest.mark.parametrize(
+    "method, route",
+    [
+        ("POST", "/config/update"),
+        ("POST", "/config/field/update"),
+        ("POST", "/config/callback/delete"),
+        ("POST", "/config/pass_through_endpoint"),
+        ("DELETE", "/config/pass_through_endpoint"),
+        ("POST", "/update/sso_settings"),
+        ("PATCH", "/update/ui_settings"),
+        ("POST", "/cache/settings"),
+        ("POST", "/cache/settings/test"),
+        ("POST", "/config_overrides/hashicorp_vault"),
+        ("POST", "/credentials"),
+        ("PATCH", "/credentials/some-name"),
+    ],
+)
+def test_config_file_only_mode_rejects_runtime_config_writes(monkeypatch, method, route):
+    monkeypatch.setenv("LITELLM_CONFIG_FILE_ONLY", "true")
+    with pytest.raises(HTTPException) as denied:
+        RouteChecks.reject_config_writes_in_file_only_mode(route=route, request=_request(method, route, None))
+    assert denied.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "method, route",
+    [
+        ("GET", "/config/list"),
+        ("GET", "/get/config/callbacks"),
+        ("GET", "/credentials"),
+        ("POST", "/key/generate"),
+        ("POST", "/user/update"),
+        ("POST", "/v1/chat/completions"),
+        ("POST", "/configuration-lookalike"),
+    ],
+)
+def test_config_file_only_mode_allows_reads_and_other_writes(monkeypatch, method, route):
+    monkeypatch.setenv("LITELLM_CONFIG_FILE_ONLY", "true")
+    RouteChecks.reject_config_writes_in_file_only_mode(route=route, request=_request(method, route, None))
+
+
+@pytest.mark.parametrize("value", [None, "false", ""])
+def test_config_file_only_mode_off_allows_config_writes(monkeypatch, value):
+    if value is None:
+        monkeypatch.delenv("LITELLM_CONFIG_FILE_ONLY", raising=False)
+    else:
+        monkeypatch.setenv("LITELLM_CONFIG_FILE_ONLY", value)
+    RouteChecks.reject_config_writes_in_file_only_mode(
+        route="/config/update", request=_request("POST", "/config/update", None)
+    )
+
+
+@pytest.mark.asyncio
+async def test_user_api_key_auth_applies_config_file_only_mode(monkeypatch):
+    _patch_proxy_server(monkeypatch)
+    monkeypatch.delenv("LITELLM_MASTER_KEY_ALLOWED_IPS", raising=False)
+    monkeypatch.delenv("LITELLM_MASTER_KEY_MANAGEMENT_ONLY", raising=False)
+    monkeypatch.setenv("LITELLM_CONFIG_FILE_ONLY", "true")
+    request = _request("POST", "/config/update", "/config/update", body=b"{}")
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.run_centralized_common_checks",
+        new_callable=AsyncMock,
+    ):
+        with pytest.raises(HTTPException) as denied:
+            await _authenticate(request)
+    assert denied.value.status_code == 403
+    assert "Runtime configuration changes are disabled" in str(denied.value.detail)
+
+
+def test_config_file_environment_variables_cannot_enable_executable_credentials(monkeypatch):
+    import os
+
+    for name in ("GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES", "GOOGLE_APPLICATION_CREDENTIALS"):
+        monkeypatch.delenv(name, raising=False)
+    proxy_server.ProxyConfig()._load_environment_variables(
+        config={
+            "environment_variables": {
+                "GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES": "1",
+                "GOOGLE_APPLICATION_CREDENTIALS": "/tmp/x.json",
+            }
+        }
+    )
+    assert os.environ.get("GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES") is None
+    assert os.environ.get("GOOGLE_APPLICATION_CREDENTIALS") is None

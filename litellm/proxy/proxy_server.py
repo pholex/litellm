@@ -6730,6 +6730,12 @@ class ProxyConfig:
         "LOGNAME",
         "NO_PROXY",
         "no_proxy",
+        # google-auth: running executable credential sources, and which
+        # credential file the default credential chain loads.
+        "GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_API_USE_CLIENT_CERTIFICATE",
+        "CLOUDSDK_CONFIG",
     }
 
     def _load_environment_variables(self, config: dict):

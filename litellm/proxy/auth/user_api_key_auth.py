@@ -4408,6 +4408,7 @@ async def _authorize_authenticated_request(
     ## ENSURE DISABLE ROUTE WORKS ACROSS ALL USER AUTH FLOWS ##
     RouteChecks.should_call_route(route=route, valid_token=user_api_key_auth_obj, request=request)
     RouteChecks.reject_env_references_in_management_writes(route=route, request=request, request_data=request_data)
+    RouteChecks.reject_config_writes_in_file_only_mode(route=route, request=request)
     await _normalize_claude_model(request_data, user_api_key_auth_obj, request, route)
     await _resolve_router_settings_model_group_alias(request_data, user_api_key_auth_obj, request, route)
     _resolve_codex_native_chatgpt_model(request_data, user_api_key_auth_obj, request, route)

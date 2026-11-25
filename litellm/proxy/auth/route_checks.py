@@ -268,6 +268,11 @@ def _is_master_key_source_allowed(request: Request | None, networks: list[_IPNet
 
 
 _ENV_REFERENCE_PREFIX: Final = "os.environ/"
+# Route prefixes that change proxy configuration at runtime. With
+# LITELLM_CONFIG_FILE_ONLY=true every write to them is refused, so callbacks,
+# environment variables, SSO settings, cache settings and credentials can only
+# come from the config file and the deployment.
+_CONFIG_WRITE_PREFIXES: Final = ("/config/", "/config_overrides/", "/update/", "/cache/settings", "/credentials")
 _WRITE_METHODS: Final = frozenset(("POST", "PUT", "PATCH", "DELETE"))
 
 
@@ -323,6 +328,21 @@ class RouteChecks:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Environment variable references are not permitted in management requests.",
+            )
+
+    @staticmethod
+    def reject_config_writes_in_file_only_mode(route: str, request: Request | None) -> None:
+        if request is None or get_secret_bool("LITELLM_CONFIG_FILE_ONLY") is not True:
+            return
+        method: Final = RouteChecks.get_request_method(request=request)
+        if method not in _WRITE_METHODS:
+            return
+        path: Final = route if route.startswith("/") else "/" + route
+        if any(path == prefix.rstrip("/") or path.startswith(prefix) for prefix in _CONFIG_WRITE_PREFIXES):
+            verbose_proxy_logger.warning("Rejected a runtime configuration write in config-file-only mode.")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Runtime configuration changes are disabled. Change the config file and redeploy.",
             )
 
     @staticmethod
