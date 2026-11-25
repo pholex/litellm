@@ -17777,6 +17777,120 @@ async def test_list_keys_non_admin_cannot_opt_into_substring():
     assert kwargs["user_id"] == "alice"
 
 
+async def _list_keys_capture_helper_kwargs_with_team(user_api_key_dict, **list_kwargs):
+    """Like _list_keys_capture_helper_kwargs, but the caller is a regular
+    (non-admin) member of one team."""
+    from unittest.mock import Mock, patch
+
+    from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable
+
+    mock_user_info = LiteLLM_UserTable(
+        user_id=user_api_key_dict.user_id,
+        user_email="u@example.com",
+        teams=["team-1"],
+        organization_memberships=[],
+    )
+    team = LiteLLM_TeamTable(
+        team_id="team-1",
+        members_with_roles=[{"user_id": user_api_key_dict.user_id, "role": "user"}],
+    )
+    helper = AsyncMock(
+        return_value={"keys": [], "total_count": 0, "current_page": 1, "total_pages": 0}
+    )
+    with patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()):
+        with patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_list_check",
+            return_value=mock_user_info,
+        ):
+            with patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints._fetch_user_team_objects",
+                AsyncMock(return_value=[team]),
+            ):
+                with patch(
+                    "litellm.proxy.management_endpoints.key_management_endpoints.list_key_helper",
+                    helper,
+                ):
+                    await list_keys(
+                        request=Mock(),
+                        user_api_key_dict=user_api_key_dict,
+                        status=None,
+                        **list_kwargs,
+                    )
+    return helper.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_list_keys_view_only_admin_team_member_sees_all_keys():
+    """Regression: a view-only proxy admin who is also a regular member of a team
+    must still list every key. The dashboard always sends include_team_keys and
+    include_created_by_keys; with no user_id those team conditions used to become
+    the only filter (team service accounts only), hiding all user-owned keys."""
+    viewer = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, user_id="viewer-1"
+    )
+    kwargs = await _list_keys_capture_helper_kwargs_with_team(
+        viewer,
+        user_id=None,
+        include_team_keys=True,
+        include_created_by_keys=True,
+        substring_matching=True,
+    )
+    assert kwargs["user_id"] is None
+    assert not kwargs["admin_team_ids"]
+    assert not kwargs["member_team_ids"]
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    where = _build_key_filter_conditions(
+        user_id=kwargs["user_id"],
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=kwargs["admin_team_ids"],
+        member_team_ids=kwargs["member_team_ids"],
+        include_created_by_keys=True,
+    )
+    # Only the baseline "hide dashboard session tokens" filter remains: no user
+    # or team restriction.
+    assert where == {"OR": [{"team_id": None}, {"team_id": {"not": "litellm-dashboard"}}]}
+
+
+@pytest.mark.asyncio
+async def test_list_keys_view_only_admin_with_user_id_keeps_team_scoping():
+    """Scoping to a user_id keeps the existing team-widening behavior."""
+    viewer = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, user_id="viewer-1"
+    )
+    kwargs = await _list_keys_capture_helper_kwargs_with_team(
+        viewer,
+        user_id="alice",
+        include_team_keys=True,
+        include_created_by_keys=True,
+        substring_matching=False,
+    )
+    assert kwargs["user_id"] == "alice"
+    assert kwargs["member_team_ids"] == ["team-1"]
+
+
+@pytest.mark.asyncio
+async def test_list_keys_internal_user_team_member_still_scoped():
+    """Non-admins are unaffected: still scoped to self plus team service accounts."""
+    user = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="alice")
+    kwargs = await _list_keys_capture_helper_kwargs_with_team(
+        user,
+        user_id=None,
+        include_team_keys=True,
+        include_created_by_keys=True,
+        substring_matching=False,
+    )
+    assert kwargs["user_id"] == "alice"
+    assert kwargs["member_team_ids"] == ["team-1"]
+
+
 def _prisma_where_matches(row, where):
     for field, expected in where.items():
         if field == "AND":

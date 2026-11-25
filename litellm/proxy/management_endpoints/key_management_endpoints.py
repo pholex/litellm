@@ -7334,9 +7334,23 @@ async def list_keys(
             prisma_client=prisma_client,
         )
 
+        is_proxy_admin: Final = user_api_key_dict.user_role in [
+            LitellmUserRoles.PROXY_ADMIN.value,
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+        ]
+
+        # A proxy admin (including view-only) listing without a user_id sees every
+        # key. Team-scoped conditions are meant to widen a user-scoped listing; with
+        # no user condition they become the only filter and hide all user-owned keys
+        # from a view-only admin who is also a regular member of a team.
+        skip_team_scoping: Final = is_proxy_admin and not user_id
+
         # Fetch team objects once when needed for either admin or member filtering.
         # This avoids duplicate DB queries for the same team data.
-        if include_team_keys or include_created_by_keys:
+        if skip_team_scoping:
+            team_objects = []
+            member_team_ids = None
+        elif include_team_keys or include_created_by_keys:
             team_objects = await _fetch_user_team_objects(
                 complete_user_info=complete_user_info,
                 prisma_client=prisma_client,
@@ -7349,7 +7363,7 @@ async def list_keys(
             team_objects = []
             member_team_ids = None
 
-        if include_team_keys:
+        if include_team_keys and not skip_team_scoping:
             admin_team_ids = _get_admin_team_ids_from_objects(
                 user_api_key_dict=user_api_key_dict,
                 team_objects=team_objects,
@@ -7365,11 +7379,6 @@ async def list_keys(
                 admin_team_ids = list({*admin_team_ids, *list_permission_team_ids})
         else:
             admin_team_ids = None
-
-        is_proxy_admin: Final = user_api_key_dict.user_role in [
-            LitellmUserRoles.PROXY_ADMIN.value,
-            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
-        ]
 
         # Substring matching is opt-in. /key/list matched user_id and key_alias
         # exactly before substring search was added; auto-applying a substring
