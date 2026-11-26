@@ -212,6 +212,9 @@ _MASTER_KEY_MANAGEMENT_ROUTES: Final[Mapping[str, frozenset[str]]] = {
 _IPNetwork: TypeAlias = ipaddress.IPv4Network | ipaddress.IPv6Network
 
 
+_ADMIN_ROLES: Final = (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+
+
 def _get_master_key_allowed_networks() -> list[_IPNetwork] | None:
     """
     Networks the proxy master key may be used from, read from the comma-separated
@@ -224,6 +227,17 @@ def _get_master_key_allowed_networks() -> list[_IPNetwork] | None:
     raw: Final = os.getenv("LITELLM_MASTER_KEY_ALLOWED_IPS")
     if raw is None or not raw.strip():
         return None
+    return _parse_allowed_networks(raw, "LITELLM_MASTER_KEY_ALLOWED_IPS")
+
+
+def _get_admin_allowed_networks() -> list[_IPNetwork] | None:
+    raw: Final = os.getenv("LITELLM_ADMIN_ALLOWED_IPS")
+    if raw is None or not raw.strip():
+        return _get_master_key_allowed_networks()
+    return _parse_allowed_networks(raw, "LITELLM_ADMIN_ALLOWED_IPS")
+
+
+def _parse_allowed_networks(raw: str, variable: str) -> list[_IPNetwork]:
     networks: Final[list[_IPNetwork]] = []
     for entry in raw.split(","):
         entry = entry.strip()
@@ -232,7 +246,7 @@ def _get_master_key_allowed_networks() -> list[_IPNetwork] | None:
         try:
             networks.append(ipaddress.ip_network(entry, strict=False))
         except ValueError:
-            verbose_proxy_logger.warning("Ignoring an invalid LITELLM_MASTER_KEY_ALLOWED_IPS entry.")
+            verbose_proxy_logger.warning("Ignoring an invalid %s entry.", variable)
     return networks
 
 
@@ -272,7 +286,16 @@ _ENV_REFERENCE_PREFIX: Final = "os.environ/"
 # LITELLM_CONFIG_FILE_ONLY=true every write to them is refused, so callbacks,
 # environment variables, SSO settings, cache settings and credentials can only
 # come from the config file and the deployment.
-_CONFIG_WRITE_PREFIXES: Final = ("/config/", "/config_overrides/", "/update/", "/cache/settings", "/credentials")
+_CONFIG_WRITE_PREFIXES: Final = (
+    "/config/",
+    "/config_overrides/",
+    "/update/",
+    "/cache/settings",
+    "/credentials",
+    "/v1/mcp/",
+    "/mcp-rest/test/",
+    "/guardrails/",
+)
 _WRITE_METHODS: Final = frozenset(("POST", "PUT", "PATCH", "DELETE"))
 
 
@@ -338,11 +361,55 @@ class RouteChecks:
         if method not in _WRITE_METHODS:
             return
         path: Final = route if route.startswith("/") else "/" + route
+        if path == "/guardrails/apply_guardrail":
+            return
         if any(path == prefix.rstrip("/") or path.startswith(prefix) for prefix in _CONFIG_WRITE_PREFIXES):
             verbose_proxy_logger.warning("Rejected a runtime configuration write in config-file-only mode.")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Runtime configuration changes are disabled. Change the config file and redeploy.",
+            )
+
+    @staticmethod
+    def _restrict_admin_identity(
+        route: str,
+        valid_token: UserAPIKeyAuth,
+        request: Request | None,
+    ) -> None:
+        if valid_token.api_key == LITELLM_PROXY_MASTER_KEY_ALIAS:
+            return
+        if valid_token.user_role not in _ADMIN_ROLES:
+            return
+
+        is_ui_session: Final = valid_token.team_id == UI_TEAM_ID
+        is_model_route: Final = RouteChecks.is_llm_api_route(route=route)
+
+        if not is_ui_session:
+            if is_model_route:
+                return
+            if get_secret_bool("LITELLM_ADMIN_SESSION_ONLY") is True:
+                from .auth_utils import get_request_route_template
+
+                method: Final = RouteChecks.get_request_method(request=request)
+                template: Final = get_request_route_template(request=request) if request is not None else None
+                if method == "GET" and template == "/key/info":
+                    return
+                verbose_proxy_logger.warning("Rejected a management request made with an administrator API key.")
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Administrator API keys are restricted to model routes. Sign in to the UI for administration.",
+                )
+
+        allowed_networks: Final = _get_admin_allowed_networks()
+        if allowed_networks is not None and not _is_master_key_source_allowed(
+            request=request, networks=allowed_networks
+        ):
+            verbose_proxy_logger.warning(
+                "Rejected an administrator request from a source address outside LITELLM_ADMIN_ALLOWED_IPS."
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Administrator access is not accepted from this source address.",
             )
 
     @staticmethod
@@ -393,6 +460,7 @@ class RouteChecks:
                     detail="The proxy master key is restricted to management routes.",
                 )
 
+        RouteChecks._restrict_admin_identity(route=route, valid_token=valid_token, request=request)
         RouteChecks.check_route_enabled(route)
         # Check if Virtual Key is allowed to call the route - Applies to all Roles
         RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=valid_token, request=request)

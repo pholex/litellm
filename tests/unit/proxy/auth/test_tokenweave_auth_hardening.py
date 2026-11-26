@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException, Request
 
-import litellm.proxy.proxy_server as proxy_server
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+from litellm.proxy import proxy_server
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -417,3 +417,184 @@ def test_config_file_environment_variables_cannot_enable_executable_credentials(
     )
     assert os.environ.get("GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES") is None
     assert os.environ.get("GOOGLE_APPLICATION_CREDENTIALS") is None
+
+
+@pytest.mark.parametrize(
+    "method, route",
+    [
+        ("POST", "/v1/mcp/server"),
+        ("PUT", "/v1/mcp/server"),
+        ("DELETE", "/v1/mcp/server/abc"),
+        ("POST", "/v1/mcp/server/register"),
+        ("POST", "/v1/mcp/toolset"),
+        ("POST", "/mcp-rest/test/connection"),
+        ("POST", "/mcp-rest/test/tools/list"),
+        ("POST", "/guardrails"),
+        ("PUT", "/guardrails/abc"),
+        ("PATCH", "/guardrails/abc"),
+        ("DELETE", "/guardrails/abc"),
+        ("POST", "/guardrails/register"),
+        ("POST", "/guardrails/test_custom_code"),
+    ],
+)
+def test_config_file_only_mode_rejects_mcp_and_guardrail_writes(monkeypatch, method, route):
+    monkeypatch.setenv("LITELLM_CONFIG_FILE_ONLY", "true")
+    with pytest.raises(HTTPException) as denied:
+        RouteChecks.reject_config_writes_in_file_only_mode(route=route, request=_request(method, route, route))
+    assert denied.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "method, route",
+    [
+        ("GET", "/v1/mcp/server"),
+        ("GET", "/guardrails/list"),
+        ("POST", "/guardrails/apply_guardrail"),
+        ("POST", "/mcp-rest/tools/call"),
+        ("POST", "/guardrails-lookalike"),
+    ],
+)
+def test_config_file_only_mode_keeps_mcp_and_guardrail_reads_and_inference(monkeypatch, method, route):
+    monkeypatch.setenv("LITELLM_CONFIG_FILE_ONLY", "true")
+    RouteChecks.reject_config_writes_in_file_only_mode(route=route, request=_request(method, route, route))
+
+
+_TRUSTED = {"x-forwarded-for": "203.0.113.7"}
+_UNTRUSTED = {"x-forwarded-for": "198.51.100.9"}
+
+
+def _admin_token(role=LitellmUserRoles.PROXY_ADMIN, team_id="team-1"):
+    return UserAPIKeyAuth(api_key="virtual-key-hash", user_id="admin-user", team_id=team_id, user_role=role)
+
+
+def _admin_env(monkeypatch, session_only=True, admin_ips=None, master_ips="203.0.113.7"):
+    for name, value in (
+        ("LITELLM_ADMIN_SESSION_ONLY", "true" if session_only else None),
+        ("LITELLM_ADMIN_ALLOWED_IPS", admin_ips),
+        ("LITELLM_MASTER_KEY_ALLOWED_IPS", master_ips),
+    ):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+
+
+@pytest.mark.parametrize("role", [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, "proxy_admin"])
+@pytest.mark.parametrize(
+    "method, path",
+    [
+        ("GET", "/key/list"),
+        ("GET", "/user/list"),
+        ("GET", "/spend/logs/v2"),
+        ("POST", "/key/generate"),
+        ("POST", "/user/update"),
+        ("POST", "/key/info"),
+    ],
+)
+def test_admin_api_key_cannot_reach_management_routes(monkeypatch, role, method, path):
+    """An administrator's everyday API key carries no administrative power, even
+    from a trusted source."""
+    _admin_env(monkeypatch)
+    token = _admin_token()
+    token.user_role = role
+    request = _master_key_request(headers=_TRUSTED, method=method, path=path)
+    with pytest.raises(HTTPException) as denied:
+        RouteChecks.should_call_route(route=path, valid_token=token, request=request)
+    assert denied.value.status_code == 403
+    assert "Administrator API keys" in denied.value.detail
+
+
+@pytest.mark.parametrize(
+    "headers, method, path",
+    [
+        (_UNTRUSTED, "POST", "/v1/chat/completions"),
+        (_UNTRUSTED, "POST", "/v1/responses"),
+        (_UNTRUSTED, "POST", "/v1/messages"),
+        (_UNTRUSTED, "GET", "/v1/models"),
+        # Services that validate a caller's key read its own info, from any address.
+        (_UNTRUSTED, "GET", "/key/info"),
+        ({}, "GET", "/key/info"),
+    ],
+)
+def test_admin_api_key_keeps_model_routes_and_own_key_info(monkeypatch, headers, method, path):
+    _admin_env(monkeypatch)
+    request = _master_key_request(headers=headers, client=("127.0.0.1", 1), method=method, path=path)
+    assert RouteChecks.should_call_route(route=path, valid_token=_admin_token(), request=request)
+
+
+@pytest.mark.parametrize("role", [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY])
+@pytest.mark.parametrize(
+    "method, path", [("GET", "/key/list"), ("POST", "/user/update"), ("POST", "/v1/chat/completions")]
+)
+def test_admin_ui_session_requires_allowed_source(monkeypatch, role, method, path):
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+    _admin_env(monkeypatch)
+    token = _admin_token(role=role, team_id=UI_SESSION_TOKEN_TEAM_ID)
+    ok = _master_key_request(headers=_TRUSTED, method=method, path=path)
+    assert RouteChecks.should_call_route(route=path, valid_token=token, request=ok)
+    for headers in (_UNTRUSTED, {"x-forwarded-for": "203.0.113.7, 198.51.100.9"}):
+        bad = _master_key_request(headers=headers, method=method, path=path)
+        with pytest.raises(HTTPException) as denied:
+            RouteChecks.should_call_route(route=path, valid_token=token, request=bad)
+        assert denied.value.status_code == 403
+        assert "source address" in denied.value.detail
+
+
+def test_admin_allowed_ips_override_master_key_list(monkeypatch):
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+    _admin_env(monkeypatch, admin_ips="192.0.2.0/24")
+    token = _admin_token(team_id=UI_SESSION_TOKEN_TEAM_ID)
+    ok = _master_key_request(headers={"x-forwarded-for": "192.0.2.9"})
+    assert RouteChecks.should_call_route(route="/key/list", valid_token=token, request=ok)
+    with pytest.raises(HTTPException):
+        RouteChecks.should_call_route(
+            route="/key/list", valid_token=token, request=_master_key_request(headers=_TRUSTED)
+        )
+    # The master key keeps its own list.
+    assert RouteChecks.should_call_route(
+        route="/key/list", valid_token=_master_key_token(), request=_master_key_request(headers=_TRUSTED)
+    )
+
+
+def test_admin_allowed_ips_all_invalid_entries_deny(monkeypatch):
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+    _admin_env(monkeypatch, admin_ips="office")
+    token = _admin_token(team_id=UI_SESSION_TOKEN_TEAM_ID)
+    with pytest.raises(HTTPException):
+        RouteChecks.should_call_route(
+            route="/key/list", valid_token=token, request=_master_key_request(headers=_TRUSTED)
+        )
+
+
+def test_admin_api_key_without_session_only_needs_allowed_source(monkeypatch):
+    """With the session-only flag off an admin API key still manages, but only
+    from an allowed source; model calls stay open."""
+    _admin_env(monkeypatch, session_only=False)
+    token = _admin_token()
+    assert RouteChecks.should_call_route(
+        route="/key/list", valid_token=token, request=_master_key_request(headers=_TRUSTED)
+    )
+    with pytest.raises(HTTPException) as denied:
+        RouteChecks.should_call_route(
+            route="/key/list", valid_token=token, request=_master_key_request(headers=_UNTRUSTED)
+        )
+    assert "source address" in denied.value.detail
+    llm = _master_key_request(headers=_UNTRUSTED, method="POST", path="/v1/responses")
+    assert RouteChecks.should_call_route(route="/v1/responses", valid_token=token, request=llm)
+
+
+def test_admin_restrictions_unset_change_nothing(monkeypatch):
+    _admin_env(monkeypatch, session_only=False, master_ips=None)
+    request = _master_key_request(headers=_UNTRUSTED, method="POST", path="/key/generate")
+    assert RouteChecks.should_call_route(route="/key/generate", valid_token=_admin_token(), request=request)
+
+
+@pytest.mark.parametrize("method, path", [("GET", "/key/info"), ("GET", "/user/info"), ("POST", "/key/generate")])
+def test_admin_restrictions_do_not_touch_internal_users(monkeypatch, method, path):
+    _admin_env(monkeypatch)
+    token = _admin_token(role=LitellmUserRoles.INTERNAL_USER)
+    request = _master_key_request(headers=_UNTRUSTED, method=method, path=path)
+    assert RouteChecks.should_call_route(route=path, valid_token=token, request=request)

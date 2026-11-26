@@ -6,6 +6,10 @@
 
 候选已在隔离 ECS 验证基本代理、Kimi Runtime Chat、GPT-6.2 Converse、Rust 路由以及合成数据升级和回读。生产切换前仍需核对生产数据库副本、供应商账单和下表标明的外部依赖。
 
+## 2026-11-26 增量对齐
+
+来源为 `tokenweave/1.91.x@8bb41ee658`。在此前验收基线之后，旧线增加 13 个功能或修复提交。新线至 `bf10e99d39` 已移植其中 11 项，并已有 `b77942c2e8` 对应的 Vertex 凭据别名过滤。版本 `1.110.1+tokenweave.20261126.1` 补入 `6ad0fdb682` 的管理员会话、来源限制和仅配置文件模式下的 MCP、guardrail 写操作限制。镜像启用 `LITELLM_ADMIN_SESSION_ONLY=true`，并沿用此前的 `LITELLM_MASTER_KEY_MANAGEMENT_ONLY=true`。使用此镜像默认设置时，推理客户端需要使用独立的模型调用凭据。
+
 ## 候选验证
 
 使用锁定的 Python 3.13 依赖，从候选源码成功构建上游 Rust 扩展。Seedance、Responses 工具和历史、模型列表、会话认证、MiniMax 视频及 Bedrock 转换共 1,612 个不同的单元测试通过。其中一个自签名 vLLM 模型列表用例在默认沙箱中因不能绑定本地端口失败，在允许本地端口后单独通过。Python 语法检查、变更行 Ruff 检查与 `git diff --check` 通过。
