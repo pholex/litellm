@@ -39,7 +39,7 @@ jobs:
       - name: Compute image metadata
         id: meta
         run: |
-          SHORT_SHA=$(git rev-parse --short HEAD)
+          SHORT_SHA="${GITHUB_SHA::7}"
           BRANCH_SLUG=$(echo "${GITHUB_REF_NAME}" | tr '/' '-')
           echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
           echo "branch_slug=${BRANCH_SLUG}" >> "$GITHUB_OUTPUT"
