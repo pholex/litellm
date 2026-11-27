@@ -8704,9 +8704,6 @@ async def _run_builder_with_key_lookup(get_key_object_mock):
                 "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
                 get_key_object_mock,
             ),
-            patch(
-                "litellm.proxy.auth.auth_exception_handler.seed_request_identity",
-            ),
         ):
             return await user_api_key_auth_builder(
                 request=request,
@@ -8769,7 +8766,6 @@ async def test_burst_against_a_stalled_db_fails_fast_with_503_and_turns_readines
             patch(  # test-quality-ok: lowers the module-level lookup deadline so the stalled burst finishes fast
                 "litellm.proxy.db.db_lookup_gate.PROXY_DB_LOOKUP_DEADLINE_SECONDS", 0.2
             ),
-            patch("litellm.proxy.auth.auth_exception_handler.seed_request_identity"),
         ):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as client:
                 started = time.monotonic()
@@ -13825,7 +13821,10 @@ async def _refusal_before_body(
         pytest.raises(ProxyException) as exc,
     ):
         await user_api_key_auth(request=_request_whose_body_must_not_be_read(api_key), api_key=f"Bearer {api_key}")
-    proxy_logging_obj.post_call_failure_hook.assert_awaited_once()
+    if cached_key.blocked:
+        proxy_logging_obj.post_call_failure_hook.assert_not_awaited()
+    else:
+        proxy_logging_obj.post_call_failure_hook.assert_awaited_once()
     return exc.value
 
 
@@ -14010,7 +14009,7 @@ async def test_blocked_cached_key_is_refused_before_the_body_is_read() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("body_mode", ("small-json", "large-unread", "stalled", "laya", "bespoke"))
 @pytest.mark.parametrize("blocked", (True, False), ids=("blocked", "rate-limited"))
-async def test_preflight_rejection_preserves_failure_logging_context(body_mode: str, blocked: bool) -> None:
+async def test_preflight_rejection_separates_auth_denial_from_rate_limit_logging(body_mode: str, blocked: bool) -> None:
     from litellm.proxy.utils import hash_token
 
     api_key: Final = "sk-preflight-logging"
@@ -14053,6 +14052,7 @@ async def test_preflight_rejection_preserves_failure_logging_context(body_mode: 
     upload.put_nowait({"type": "http.request", "body": b"{", "more_body": True})
 
     async def receive() -> dict[str, object]:
+        assert not blocked, "blocked keys must not read request bodies for logging"
         assert body_mode in ("small-json", "stalled"), "large refused bodies must not be read"
         if body_mode == "stalled":
             return await upload.get()
@@ -14087,6 +14087,9 @@ async def test_preflight_rejection_preserves_failure_logging_context(body_mode: 
     ):
         await asyncio.wait_for(user_api_key_auth(request=request, api_key=f"Bearer {api_key}"), timeout=3)
     assert failure.value.code == ("401" if blocked else "429")
+    if blocked:
+        logging_obj.post_call_failure_hook.assert_not_awaited()
+        return
     logging_obj.post_call_failure_hook.assert_awaited_once()
     data: Final = logging_obj.post_call_failure_hook.call_args.kwargs["request_data"]
     assert data["litellm_call_id"] == "caller-call-id"

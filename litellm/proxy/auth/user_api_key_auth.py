@@ -2297,7 +2297,6 @@ async def _reject_from_headers_before_reading_body(
         return
     parent_otel_span: Final[Span | None] = getattr(request.state, "parent_otel_span", None)
     if cached_key.blocked is True:
-        request_data: Final = dict(await _preflight_failure_request_data(request, route, cached_key))
         await UserAPIKeyAuthExceptionHandler.handle_authentication_error(
             e=ProxyException(
                 message="Authentication Error, Key is blocked. Update via `/key/unblock` if you're an admin.",
@@ -2306,12 +2305,11 @@ async def _reject_from_headers_before_reading_body(
                 code=status.HTTP_401_UNAUTHORIZED,
             ),
             request=request,
-            request_data=request_data,
+            request_data={},
             route=route,
             parent_otel_span=parent_otel_span,
             api_key=bearer_token,
             resolved_identity=cached_key,
-            dispatched_call_type=str(request_data["call_type"]) if request_data["call_type"] is not None else None,
         )
         return
     if RouteChecks.is_unbilled_route(route) or _is_bodyless_get(request):

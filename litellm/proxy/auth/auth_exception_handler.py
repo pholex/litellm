@@ -2,17 +2,15 @@
 Handles Authentication Errors
 """
 
-import logging
-from collections.abc import Mapping
+import json
+from ipaddress import ip_address
 from typing import TYPE_CHECKING, Any, Final
+from uuid import uuid4
 
 from fastapi import HTTPException, Request, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger, verbose_proxy_stdout_logger
-from litellm.constants import EMPTY_MAPPING
-from litellm.integrations.otel.runtime import seed_request_identity
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, is_expected_client_error
 from litellm.proxy._types import (
     LitellmUserRoles,
     ModelAccessDeniedProxyException,
@@ -22,14 +20,10 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_utils import (  # noqa: F401  # legacy module exports
     _get_request_ip_address,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-    get_request_ip_address,
     is_invalid_virtual_key_error,
-    is_unauthorized_error,
     mark_invalid_virtual_key_error,
-    normalize_request_route,
 )
 from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
-from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
 from litellm.proxy.common_utils.openai_error_payload import openai_error_param
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.types.services import ServiceTypes
@@ -84,56 +78,45 @@ def _as_proxy_exception(e: Exception) -> ProxyException:
     )
 
 
-def _get_user_agent(request: Request) -> str | None:
-    if "headers" not in request.scope:
-        return None
-    return request.headers.get("user-agent")
+def _log_auth_rejection(
+    request: Request,
+    error: ProxyException,
+    identity: UserAPIKeyAuth | None,
+) -> None:
+    matched_route = getattr(request.scope.get("route"), "path", None)
+    client = request.client
+    client_ip = client.host if client is not None else None
+    try:
+        peer = str(ip_address(client_ip)) if isinstance(client_ip, str) else None
+    except ValueError:
+        peer = None
 
-
-def _with_client_context(
-    request_data: dict[str, object], requester_ip: str | None, user_agent: str | None
-) -> dict[str, object]:
-    """Auth gate rejections are raised before `add_litellm_data_to_request` records the
-    caller IP and User-Agent, so their failure logs would otherwise carry neither."""
-    key: Final = "litellm_metadata" if "litellm_metadata" in request_data else "metadata"
-    metadata: Final = request_data.get(key)
-    base: Final[Mapping[str, object]] = metadata if isinstance(metadata, Mapping) else EMPTY_MAPPING
-    stamped: Final = {
-        name: value
-        for name, value in (("requester_ip_address", requester_ip), ("user_agent", user_agent))
-        if value and not base.get(name)
+    response_status = str(error.code)
+    reason = (
+        "expired_key"
+        if error.type == ProxyErrorTypes.expired_key
+        else "budget_exceeded"
+        if error.type == ProxyErrorTypes.budget_exceeded
+        else {
+            "401": "unauthorized",
+            "403": "forbidden",
+            "429": "rate_limited",
+            "503": "service_unavailable",
+        }.get(response_status, "auth_failed")
+    )
+    fields = {
+        "event_id": uuid4().hex,
+        "route": matched_route if isinstance(matched_route, str) else None,
+        "client_ip": peer,
+        "status": response_status,
+        "reason": reason,
+        "user_id": identity.user_id[:128] if identity is not None and identity.user_id is not None else None,
+        "team_id": identity.team_id[:128] if identity is not None and identity.team_id is not None else None,
     }
-    if not stamped:
-        return request_data
-    return {**request_data, key: {**base, **stamped}}
-
-
-def _escape_control_chars(value: str) -> str:
-    return "".join(ch if ch.isprintable() else ch.encode("unicode_escape").decode("ascii") for ch in value)
-
-
-def _identity_log_suffix(resolved_identity: UserAPIKeyAuth | None) -> str:
-    """Names the owner of the rejected key so the failure log line alone identifies the caller."""
-    if resolved_identity is None or not litellm.log_auth_failure_key_identity:
-        return ""
-    fields: Final = (
-        ("key_alias", resolved_identity.key_alias),
-        ("user_id", resolved_identity.user_id),
-        ("user_email", resolved_identity.user_email),
-        ("team_id", resolved_identity.team_id),
-        ("team_alias", resolved_identity.team_alias),
-    )
-    known: Final = " ".join(f"{name}={_escape_control_chars(value)}" for name, value in fields if value)
-    return f"\nKey Identity: {known}" if known else ""
-
-
-def _auth_failure_log_message(e: Exception) -> str:
-    if not isinstance(e, KeyNotFoundError):
-        return str(e)
-    return (
-        "Authentication Error, Invalid proxy server token passed. "
-        f"key={_escape_control_chars(e.hashed_token)}, not found in db. Create key via `/key/generate` call."
-    )
+    if response_status == "401":
+        verbose_proxy_stdout_logger.warning("auth_rejected %s", json.dumps(fields))
+    else:
+        verbose_proxy_logger.error("auth_rejected %s", json.dumps(fields))
 
 
 class UserAPIKeyAuthExceptionHandler:
@@ -163,7 +146,6 @@ class UserAPIKeyAuthExceptionHandler:
             - Original Exception in all other cases
         """
         from litellm.proxy.proxy_server import (
-            general_settings,
             proxy_logging_obj,
         )
 
@@ -192,88 +174,10 @@ class UserAPIKeyAuthExceptionHandler:
                 user_role=LitellmUserRoles.INTERNAL_USER,
                 request_route=route,
             )
-        else:
-            request_mapping: Final = as_str_mapping(request_data)
-            request_context: Final[dict[str, object]] = dict(request_mapping) if request_mapping is not None else {}
-            # raise the exception to the caller
-            requester_ip: Final = get_request_ip_address(
-                request=request,
-                use_x_forwarded_for=general_settings.get("use_x_forwarded_for") is True,
-            )
-            user_agent: Final = _get_user_agent(request)
-
-            # Log authentication failures before identity seeding and callbacks, so the log
-            # survives a raising callback pipeline. Route 401 rejections to WARNING on stdout
-            # (suppressible via LITELLM_LOG=ERROR); anything else is unexpected and logs at ERROR.
-            log_extra: Final = {"requester_ip": requester_ip}
-            is_invalid_virtual_key: Final = is_invalid_virtual_key_error(e)
-            is_quiet_log: Final = is_unauthorized_error(e) and not litellm.log_client_error_tracebacks
-            logger: Final = verbose_proxy_stdout_logger if is_quiet_log else verbose_proxy_logger
-            logger.log(
-                logging.WARNING if is_quiet_log else logging.ERROR,
-                "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - %s\nRequester IP Address:%s%s",
-                _auth_failure_log_message(e),
-                requester_ip,
-                _identity_log_suffix(resolved_identity),
-                exc_info=True if litellm.log_client_error_tracebacks or not is_expected_client_error(e) else None,
-                extra=log_extra,
-            )
-
-            # Log this exception to OTEL, Datadog etc. Reuse the identity resolved
-            # before the failure (team alias/id, metadata, user) so the failed span
-            # is labeled — a fresh UserAPIKeyAuth here would drop everything auth had
-            # already looked up (e.g. an expired key whose team/user is known). Copy
-            # so the handler is side-effect-free for the caller's identity object.
-            user_api_key_dict = resolved_identity.model_copy() if resolved_identity is not None else UserAPIKeyAuth()
-            user_api_key_dict.parent_otel_span = parent_otel_span
-            user_api_key_dict.request_route = normalize_request_route(route)
-            user_api_key_dict.api_key = user_api_key_dict.api_key or UserAPIKeyAuth(api_key=api_key).api_key
-
-            # Stamp identity onto the request's server span now, before the request
-            # is rejected; the OTEL failure hooks don't touch the server span, so
-            # without this the failed trace would carry no team/key attributes.
-            seed_request_identity(
-                user_api_key_dict,
-                model=request_context.get("model"),
-            )
-
-            # Budget checks live in tenant-scoped helpers (key / team / org / tag)
-            # that don't see the request model, so the BudgetExceededError they
-            # raise carries `llm_provider=""`. Resolve it here off `request_data`
-            # so custom-callback consumers reading StandardLoggingPayload get
-            # the same `llm_provider` attribution as for RPM/TPM 429s.
-            if isinstance(e, litellm.BudgetExceededError) and not e.llm_provider:
-                from litellm.proxy.hooks.rate_limiter_utils import (
-                    resolve_llm_provider_for_rate_limit,
-                )
-
-                budget_model: Final = request_context.get("model")
-                _, e.llm_provider = resolve_llm_provider_for_rate_limit(
-                    budget_model if isinstance(budget_model, str) else None
-                )
-
-            # Allow callbacks to transform the error response
-            transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
-                request_data=_with_client_context(request_context, requester_ip, user_agent),
-                original_exception=e,
-                user_api_key_dict=user_api_key_dict,
-                error_type=ProxyErrorTypes.auth_error,
-                route=route,
-                dispatched_call_type=dispatched_call_type,
-            )
-            # Use transformed exception if callback returned one, otherwise use original
-            if transformed_exception is not None:
-                e = transformed_exception
-
-            final_exception: Final = mark_invalid_virtual_key_error(_as_proxy_exception(e), is_invalid_virtual_key)
-            # If a quiet-logged malformed-key transform yields non-401, escalate to ERROR
-            if is_quiet_log and str(final_exception.code) != str(status.HTTP_401_UNAUTHORIZED):
-                verbose_proxy_logger.error(
-                    "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - %s\nRequester IP Address:%s",
-                    final_exception,
-                    requester_ip,
-                    extra=log_extra,
-                )
-            raise final_exception
+        final_exception: Final = mark_invalid_virtual_key_error(_as_proxy_exception(e), is_invalid_virtual_key_error(e))
+        identity: Final = resolved_identity if litellm.log_auth_failure_key_identity else None
+        # A rejected request must never reach configurable logging integrations.
+        _log_auth_rejection(request, final_exception, identity)
+        raise final_exception
 
     _handle_authentication_error = handle_authentication_error
